@@ -1,0 +1,70 @@
+"""ComparisonSession: the primary entry point for duckdiff.
+
+The CLI (and any future UI) are thin wrappers around this class — all
+real logic lives here so every surface behaves identically and there's
+exactly one place to test.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import duckdb
+
+from duckdiff.comparator import run_comparison
+from duckdiff.config import ComparisonConfig
+from duckdiff.results import ComparisonResult
+
+
+class ComparisonSession:
+    """Orchestrates an N-way comparison across multiple record sources.
+
+    Example
+    -------
+    >>> session = ComparisonSession()
+    >>> session.add_source("legacy", "legacy_export.csv")
+    >>> session.add_source("new", "new_export.parquet")
+    >>> result = session.compare(key_columns=["record_id"])
+    """
+
+    def __init__(self, config: ComparisonConfig | None = None) -> None:
+        self.config = config or ComparisonConfig()
+        self._sources: dict[str, str] = {}
+        self._connection: duckdb.DuckDBPyConnection = duckdb.connect(database=":memory:")
+
+    def add_source(self, name: str, path: str) -> ComparisonSession:
+        """Register a source file under a given name. Returns self for chaining."""
+        if name in self._sources:
+            raise ValueError(f"Source '{name}' already registered.")
+        self._sources[name] = path
+        return self
+
+    def suggest_column_mapping(self) -> dict[str, dict[str, str]]:
+        """Return fuzzy column-mapping suggestions across registered sources.
+
+        This never mutates the session's configuration. Review the
+        suggestions and opt in explicitly via `apply_column_mapping` if
+        you want to use them for the next `compare()` call.
+        """
+        raise NotImplementedError("Lands alongside the schema-mapping phase.")
+
+    def apply_column_mapping(self, mapping: dict[str, dict[str, str]]) -> ComparisonSession:
+        """Explicitly accept a column mapping (own or suggested) for future compares."""
+        raise NotImplementedError("Lands alongside the schema-mapping phase.")
+
+    def compare(self, key_columns: list[str] | None = None) -> ComparisonResult:
+        """Run the comparison across all registered sources."""
+        if len(self._sources) < 2:
+            raise ValueError("Need at least 2 sources to compare.")
+        if key_columns:
+            self.config.key_columns = key_columns
+        return run_comparison(self._sources, self.config, connection=self._connection)
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def __enter__(self) -> ComparisonSession:
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.close()
