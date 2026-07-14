@@ -44,7 +44,7 @@ class ComparisonConfig:
     # when schemas don't line up exactly, using an *explicitly accepted*
     # mapping — it never causes a mapping to be guessed and applied silently.
     enable_fuzzy_column_mapping: bool = False
-    fuzzy_match_threshold: float = 0.85
+    fuzzy_match_threshold: float = 0.6  # was 0.85 -- see schema.py docstring for why
 
     # Sanity-check mode: run cheap pre-flight checks (row counts, column
     # overlap, dtype compatibility) and report them before doing the full
