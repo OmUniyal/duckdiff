@@ -35,13 +35,17 @@ def test_compare_requires_at_least_two_sources(sample_csv_pair):
         session.compare()
 
 
-def test_compare_raises_not_implemented_until_engine_lands(sample_csv_pair):
+def test_compare_runs_end_to_end_through_the_session(sample_csv_pair):
+    """left/right differ only on id=2's amount -- confirms the session wires
+    add_source() -> compare() -> run_comparison() correctly, not just that
+    the comparator works in isolation (see test_comparator.py for that)."""
     left, right = sample_csv_pair
     session = ComparisonSession()
     session.add_source("left", left)
     session.add_source("right", right)
-    with pytest.raises(NotImplementedError):
-        session.compare(key_columns=["id"])
+    result = session.compare(key_columns=["id"])
+    assert result.matched_row_count == 1
+    assert result.mismatched_row_count == 1
 
 
 def test_context_manager_closes_connection(sample_csv_pair):

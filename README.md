@@ -2,10 +2,6 @@
 
 N-way, order-independent comparison of large record files, powered by [DuckDB](https://duckdb.org/).
 
-> **Status: early scaffolding.** The public API below is stable by intent,
-> but `ComparisonSession.compare()` currently raises `NotImplementedError` —
-> the comparison engine itself is the next phase of work.
-
 ## Why
 
 Most diff tools compare exactly two files and assume they fit in memory.
@@ -17,7 +13,18 @@ Most diff tools compare exactly two files and assume they fit in memory.
   comparisons aren't bounded by RAM.
 - **Interactive fuzzy column mapping.** When schemas don't line up exactly
   (renamed columns, casing differences), `duckdiff` suggests a mapping —
-  it never guesses and applies one silently.
+  it never guesses and applies one silently. *(Not yet implemented.)*
+
+## Two comparison modes
+
+- **No `key_columns`** — a row's entire content is its identity. This is a
+  true order-independent, duplicate-aware (multiset) comparison: are the
+  same records present, regardless of order? Implemented via DuckDB's
+  native `INTERSECT ALL` / `EXCEPT ALL`.
+- **`key_columns` given** — rows are aligned across sources by key, then
+  the remaining columns are diffed per aligned row. This is what lets a
+  result distinguish "row X differs in column Y" from "row X is only in
+  source A", and is required for tolerance-based (approximate) matching.
 
 ## Design principles
 
@@ -25,8 +32,9 @@ Most diff tools compare exactly two files and assume they fit in memory.
   numeric tolerances, sanity-check mode) is off until you turn it on.
 - **One engine, thin surfaces.** `ComparisonSession` is where all the logic
   lives. The CLI is a thin wrapper around it, and any future UI will be too.
-- **Row identity via content hash.** Rows are matched across sources using
-  an order-independent hash over the key columns, not row position.
+- **Exact schema match required (for now).** Comparison columns must match
+  exactly by name across sources once `ignore_columns` is applied — a
+  `SchemaMismatchError` is raised otherwise. Fuzzy mapping will relax this.
 
 ## Install
 
@@ -44,7 +52,22 @@ with ComparisonSession() as session:
     session.add_source("new", "new_export.parquet")
     result = session.compare(key_columns=["record_id"])
 
-print(result)
+print(result.matched_row_count, result.mismatched_row_count, result.only_in)
+```
+
+Tolerance-based comparison (requires `key_columns`):
+
+```python
+from duckdiff import ComparisonSession, ComparisonConfig, ToleranceRule
+
+config = ComparisonConfig(
+    key_columns=["record_id"],
+    tolerances=[ToleranceRule(column="amount", absolute=0.01)],
+)
+with ComparisonSession(config) as session:
+    session.add_source("legacy", "legacy_export.csv")
+    session.add_source("new", "new_export.parquet")
+    result = session.compare()
 ```
 
 ## Project layout
@@ -53,7 +76,7 @@ print(result)
 src/duckdiff/
 ├── session.py      # ComparisonSession — the real engine, everything else wraps this
 ├── config.py        # ComparisonConfig — minimal-by-default options
-├── comparator.py    # N-way DuckDB comparison logic (stub — next phase)
+├── comparator.py    # N-way DuckDB comparison logic (both modes implemented)
 ├── schema.py         # Fuzzy column-mapping suggestions (stub — next phase)
 ├── results.py        # ComparisonResult / SourceSummary data structures
 ├── exceptions.py       # DuckDiffError hierarchy
@@ -63,9 +86,9 @@ src/duckdiff/
 ## Roadmap
 
 - [x] Project scaffolding, config/result data model, session API surface
-- [ ] Core N-way comparison engine (DuckDB, content-hash row matching)
+- [x] Core N-way comparison engine (full-row multiset mode + keyed mode with tolerance)
 - [ ] Fuzzy column-mapping suggestions
-- [ ] Tolerance-based comparison + sanity-check mode
+- [ ] `--dry-run` cost preview for large comparisons
 - [ ] UI (thin wrapper over `ComparisonSession`, TBD)
 
 ## License
