@@ -13,7 +13,7 @@ Most diff tools compare exactly two files and assume they fit in memory.
   comparisons aren't bounded by RAM.
 - **Interactive fuzzy column mapping.** When schemas don't line up exactly
   (renamed columns, casing differences), `duckdiff` suggests a mapping —
-  it never guesses and applies one silently. *(Not yet implemented.)*
+  it never guesses and applies one silently.
 
 ## Two comparison modes
 
@@ -32,9 +32,10 @@ Most diff tools compare exactly two files and assume they fit in memory.
   numeric tolerances, sanity-check mode) is off until you turn it on.
 - **One engine, thin surfaces.** `ComparisonSession` is where all the logic
   lives. The CLI is a thin wrapper around it, and any future UI will be too.
-- **Exact schema match required (for now).** Comparison columns must match
-  exactly by name across sources once `ignore_columns` is applied — a
-  `SchemaMismatchError` is raised otherwise. Fuzzy mapping will relax this.
+- **Exact schema match required, unless a mapping is applied.** Comparison
+  columns must match exactly by name across sources once `ignore_columns`
+  and any accepted column mapping are applied — `SchemaMismatchError`
+  otherwise.
 
 ## Install
 
@@ -70,14 +71,29 @@ with ComparisonSession(config) as session:
     result = session.compare()
 ```
 
-## Project layout
+Reconciling renamed columns (fuzzy suggestions, nothing auto-applied):
 
+```python
+from duckdiff import ComparisonSession, ComparisonConfig
+
+config = ComparisonConfig(enable_fuzzy_column_mapping=True)
+with ComparisonSession(config) as session:
+    session.add_source("legacy", "legacy_export.csv")   # has 'cust_id'
+    session.add_source("new", "new_export.parquet")     # has 'customer_id'
+
+    suggestion = session.suggest_column_mapping()  # {'legacy': {'cust_id': 'customer_id'}}
+    session.apply_column_mapping(suggestion)        # explicit opt-in, review first
+
+    result = session.compare(key_columns=["customer_id"])
+```
+
+## Project layout
 ```
 src/duckdiff/
 ├── session.py      # ComparisonSession — the real engine, everything else wraps this
 ├── config.py        # ComparisonConfig — minimal-by-default options
 ├── comparator.py    # N-way DuckDB comparison logic (both modes implemented)
-├── schema.py         # Fuzzy column-mapping suggestions (stub — next phase)
+├── schema.py         # Fuzzy column-mapping suggestions (implemented)
 ├── results.py        # ComparisonResult / SourceSummary data structures
 ├── exceptions.py       # DuckDiffError hierarchy
 └── cli.py               # Thin argparse-based CLI wrapper
@@ -87,7 +103,7 @@ src/duckdiff/
 
 - [x] Project scaffolding, config/result data model, session API surface
 - [x] Core N-way comparison engine (full-row multiset mode + keyed mode with tolerance)
-- [ ] Fuzzy column-mapping suggestions
+- [x] Fuzzy column-mapping suggestions
 - [ ] `--dry-run` cost preview for large comparisons
 - [ ] UI (thin wrapper over `ComparisonSession`, TBD)
 
