@@ -221,6 +221,36 @@ def test_schema_mismatch_raises_with_details(tmp_path):
         run_comparison({"a": a, "b": b}, ComparisonConfig())
 
 
+def test_column_mapping_reconciles_renamed_columns(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,total", "1,10.0"])  # 'total' vs 'amount'
+    config = ComparisonConfig(key_columns=["id"])
+    mapping = {"b": {"total": "amount"}}
+    result = run_comparison({"a": a, "b": b}, config, column_mapping=mapping)
+    assert result.matched_row_count == 1
+    assert result.mismatched_row_count == 0
+
+
+def test_column_mapping_only_renames_mapped_columns(tmp_path):
+    """Columns not mentioned in the mapping keep their original name --
+    confirms partial mappings work, not just fully-specified ones."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,note", "1,10.0,hi"])
+    b = _write_csv(tmp_path, "b.csv", ["id,total,note", "1,10.0,hi"])
+    config = ComparisonConfig(key_columns=["id"])
+    mapping = {"b": {"total": "amount"}}  # 'note' already matches, left alone
+    result = run_comparison({"a": a, "b": b}, config, column_mapping=mapping)
+    assert result.matched_row_count == 1
+
+
+def test_no_mapping_still_requires_exact_schema_match(tmp_path):
+    """Regression: passing column_mapping=None (the default) must behave
+    exactly as before -- this is the safety net for the 'nothing applied
+    unless explicitly given' guarantee."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,total", "1,10.0"])
+    with pytest.raises(SchemaMismatchError):
+        run_comparison({"a": a, "b": b}, ComparisonConfig())
+
 # ---------------------------------------------------------------------------
 # Sanity-check mode
 # ---------------------------------------------------------------------------

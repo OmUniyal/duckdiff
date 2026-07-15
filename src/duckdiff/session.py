@@ -11,9 +11,11 @@ from typing import Any
 
 import duckdb
 
-from duckdiff.comparator import run_comparison
+from duckdiff.comparator import get_source_columns, run_comparison
 from duckdiff.config import ComparisonConfig
+from duckdiff.exceptions import ConfigurationError
 from duckdiff.results import ComparisonResult
+from duckdiff.schema import suggest_column_mapping as _suggest_column_mapping
 
 
 class ComparisonSession:
@@ -30,6 +32,7 @@ class ComparisonSession:
     def __init__(self, config: ComparisonConfig | None = None) -> None:
         self.config = config or ComparisonConfig()
         self._sources: dict[str, str] = {}
+        self._column_mapping: dict[str, dict[str, str]] = {}
         self._connection: duckdb.DuckDBPyConnection = duckdb.connect(database=":memory:")
 
     def add_source(self, name: str, path: str) -> ComparisonSession:
@@ -42,15 +45,38 @@ class ComparisonSession:
     def suggest_column_mapping(self) -> dict[str, dict[str, str]]:
         """Return fuzzy column-mapping suggestions across registered sources.
 
-        This never mutates the session's configuration. Review the
-        suggestions and opt in explicitly via `apply_column_mapping` if
-        you want to use them for the next `compare()` call.
+        This never mutates the session's configuration -- it reads each
+        source's raw schema and delegates to schema.suggest_column_mapping.
+        Review the suggestions and opt in explicitly via
+        `apply_column_mapping` if you want to use them for the next
+        `compare()` call.
         """
-        raise NotImplementedError("Lands alongside the schema-mapping phase.")
+        if len(self._sources) < 2:
+            raise ValueError("Need at least 2 sources to suggest a column mapping.")
+        source_columns = get_source_columns(self._connection, self._sources)
+        return _suggest_column_mapping(source_columns, threshold=self.config.fuzzy_match_threshold)
 
     def apply_column_mapping(self, mapping: dict[str, dict[str, str]]) -> ComparisonSession:
-        """Explicitly accept a column mapping (own or suggested) for future compares."""
-        raise NotImplementedError("Lands alongside the schema-mapping phase.")
+        """Explicitly accept a column mapping (own or suggested) for future compares.
+
+        Requires `config.enable_fuzzy_column_mapping = True` first -- a
+        second, deliberate opt-in on top of accepting a specific mapping,
+        so a mapping can never get applied just by boilerplate/copy-pasted
+        code running without the caller consciously turning the feature
+        on.
+        """
+        if not self.config.enable_fuzzy_column_mapping:
+            raise ConfigurationError(
+                "apply_column_mapping() requires config.enable_fuzzy_column_mapping "
+                "to be True. Set it explicitly before applying a mapping."
+            )
+        unknown_sources = set(mapping) - set(self._sources)
+        if unknown_sources:
+            raise ValueError(
+                f"Column mapping references unknown source(s): {sorted(unknown_sources)}"
+            )
+        self._column_mapping = mapping
+        return self
 
     def compare(self, key_columns: list[str] | None = None) -> ComparisonResult:
         """Run the comparison across all registered sources."""
@@ -58,7 +84,12 @@ class ComparisonSession:
             raise ValueError("Need at least 2 sources to compare.")
         if key_columns:
             self.config.key_columns = key_columns
-        return run_comparison(self._sources, self.config, connection=self._connection)
+        return run_comparison(
+            self._sources,
+            self.config,
+            connection=self._connection,
+            column_mapping=self._column_mapping or None,
+        )
 
     def close(self) -> None:
         self._connection.close()

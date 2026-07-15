@@ -92,10 +92,48 @@ def _sum_as_int(value: object) -> int:
     return value
 
 
-def _register_source(con: duckdb.DuckDBPyConnection, alias: str, path: str) -> list[str]:
-    """Create a view over `path` named `alias` and return its column names, in file order."""
-    con.execute(f"CREATE OR REPLACE VIEW {_q(alias)} AS SELECT * FROM {_reader_sql(path)}")
+def _register_source(
+    con: duckdb.DuckDBPyConnection,
+    alias: str,
+    path: str,
+    column_mapping: dict[str, str] | None = None,
+) -> list[str]:
+    """Create a view over `path` named `alias` and return its column names.
+
+    If `column_mapping` (original_name -> canonical_name) is given, the
+    view's columns are renamed accordingly -- unmapped columns keep their
+    original name. This is the only place renaming happens: everything
+    downstream (schema validation, comparison SQL) just sees whatever
+    column names come back from this function, mapped or not.
+    """
+    reader = _reader_sql(path)
+    if column_mapping:
+        raw_columns = [row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {reader}").fetchall()]
+        select_list = ", ".join(
+            f"{_q(col)} AS {_q(column_mapping.get(col, col))}" for col in raw_columns
+        )
+        con.execute(f"CREATE OR REPLACE VIEW {_q(alias)} AS SELECT {select_list} FROM {reader}")
+    else:
+        con.execute(f"CREATE OR REPLACE VIEW {_q(alias)} AS SELECT * FROM {reader}")
     return [row[0] for row in con.execute(f"DESCRIBE {_q(alias)}").fetchall()]
+
+
+def get_source_columns(
+    con: duckdb.DuckDBPyConnection,
+    sources: dict[str, str],
+    column_mapping: dict[str, dict[str, str]] | None = None,
+) -> dict[str, list[str]]:
+    """Register every source as a view on `con` and return its column names.
+
+    Shared by `run_comparison` (registering for a real comparison, with
+    an accepted mapping if one exists) and
+    `ComparisonSession.suggest_column_mapping` (registering to read raw
+    schemas -- no mapping, since that's what we're trying to compute).
+    """
+    return {
+        alias: _register_source(con, alias, path, (column_mapping or {}).get(alias))
+        for alias, path in sources.items()
+    }
 
 
 def _comparison_columns(
@@ -295,6 +333,7 @@ def run_comparison(
     sources: dict[str, str],
     config: ComparisonConfig,
     connection: duckdb.DuckDBPyConnection | None = None,
+    column_mapping: dict[str, dict[str, str]] | None = None,
 ) -> ComparisonResult:
     """Run an N-way comparison across the given sources.
 
@@ -309,6 +348,13 @@ def run_comparison(
         Optional existing DuckDB connection to reuse (e.g. an in-memory
         one shared across a longer-lived ComparisonSession) instead of
         opening a new one. The caller retains ownership when supplied.
+    column_mapping:
+        An explicitly-accepted column rename mapping (source name ->
+        {original_column: canonical_column}), as returned by
+        `schema.suggest_column_mapping` and reviewed by the caller.
+        Applied before schema validation, so sources that only differ
+        by column naming can still be compared. `None` (the default)
+        applies no renaming -- schemas must then match exactly.
     """
     import duckdb as duckdb_module
 
@@ -316,11 +362,10 @@ def run_comparison(
     con = connection or duckdb_module.connect(database=":memory:")
     try:
         aliases = list(sources.keys())
-        source_columns: dict[str, list[str]] = {}
-        row_counts: dict[str, int] = {}
-        for alias, path in sources.items():
-            source_columns[alias] = _register_source(con, alias, path)
-            row_counts[alias] = _scalar_query(con, f"SELECT COUNT(*) FROM {_q(alias)}")
+        source_columns = get_source_columns(con, sources, column_mapping)
+        row_counts = {
+            alias: _scalar_query(con, f"SELECT COUNT(*) FROM {_q(alias)}") for alias in aliases
+        }
 
         comparison_columns = _comparison_columns(source_columns, config.ignore_columns)
         _validate_config(config, comparison_columns)
