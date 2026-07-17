@@ -96,14 +96,37 @@ src/duckdiff/
 ├── schema.py         # Fuzzy column-mapping suggestions (implemented)
 ├── results.py        # ComparisonResult / SourceSummary data structures
 ├── exceptions.py       # DuckDiffError hierarchy
-└── cli.py               # Thin argparse-based CLI wrapper
+└── cli.py               # Thin argparse-based CLI wrapper (full argument surface)
 ```
+
+## CLI usage
+
+```
+bash
+duckdiff legacy=legacy.csv new=new.csv --key customer_id \
+    --ignore updated_at \
+    --tolerance-abs amount=0.01 \
+    --sanity-check
+```
+
+- `--key` — repeatable, for composite keys. Omit entirely for full-row
+  (order-independent, duplicate-aware) comparison instead.
+- `--ignore COLUMN` — repeatable, excludes a column from comparison.
+- `--tolerance-abs COLUMN=VALUE` / `--tolerance-rel COLUMN=VALUE` — repeatable;
+  a column can have both. Requires `--key`.
+- `--case-insensitive`, `--sanity-check` — flags.
+
+Errors (schema mismatches, invalid config) print a single `Error: ...` line
+to stderr and exit 1 — not a Python traceback.
+
 
 ## Roadmap
 
 - [x] Project scaffolding, config/result data model, session API surface
 - [x] Core N-way comparison engine (full-row multiset mode + keyed mode with tolerance)
 - [x] Fuzzy column-mapping suggestions
+- [x] CLI: full argument surface (ignore/tolerance/case/sanity-check), friendly errors
+- [ ] CLI: interactive fuzzy-mapping flow (suggest -> confirm -> apply)
 - [ ] `--dry-run` cost preview for large comparisons
 - [ ] UI (thin wrapper over `ComparisonSession`, TBD)
 
