@@ -120,6 +120,19 @@ Errors (schema mismatches, invalid config) print a single `Error: ...` line
 to stderr and exit 1 — not a Python traceback.
 
 
+## Known limitations
+
+- **CLI errors from DuckDB are passed through verbatim.** `duckdiff`'s own
+  errors (`SchemaMismatchError`, `ConfigurationError`) get clean messages,
+  but DuckDB-native failures (bad file path, malformed CSV, etc.) print
+  DuckDB's raw exception text as-is -- including the generated SQL, e.g.
+  `Error: IO Error: No files found that match the pattern "file1.csv"`.
+  This is a deliberate simplicity tradeoff: one broad `except duckdb.Error`
+  covers every DuckDB failure mode without a growing table of custom
+  translations. Safe to see (this is a local CLI over your own files, not
+  output shown to anyone else), just not as polished as it could be.
+
+
 ## Roadmap
 
 - [x] Project scaffolding, config/result data model, session API surface
