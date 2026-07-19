@@ -126,7 +126,7 @@ to stderr and exit 1 — not a Python traceback.
 - [x] Core N-way comparison engine (full-row multiset mode + keyed mode with tolerance)
 - [x] Fuzzy column-mapping suggestions
 - [x] CLI: full argument surface (ignore/tolerance/case/sanity-check), friendly errors
-- [ ] CLI: interactive fuzzy-mapping flow (suggest -> confirm -> apply)
+- [x] CLI: interactive fuzzy-mapping flow (suggest -> confirm -> apply)
 - [ ] `--dry-run` cost preview for large comparisons
 - [ ] UI (thin wrapper over `ComparisonSession`, TBD)
 

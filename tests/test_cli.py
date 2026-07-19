@@ -2,7 +2,7 @@ import argparse
 
 import pytest
 
-from duckdiff.cli import _build_tolerance_rules, _key_value_float, build_parser, main
+from duckdiff.cli import _build_tolerance_rules, _key_value_float, _prompt_yes_no, build_parser, main
 from duckdiff.config import ToleranceRule
 
 
@@ -178,3 +178,99 @@ def test_main_rejects_source_without_equals_sign(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc_info:
         main([f"{a}", f"b={a}"])  # missing 'name=' on the first source
     assert exc_info.value.code == 2
+
+
+    # ---------------------------------------------------------------------------
+# _prompt_yes_no
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_yes_no_accepts_y_and_yes():
+    assert _prompt_yes_no("?", lambda _: "y") is True
+    assert _prompt_yes_no("?", lambda _: "yes") is True
+    assert _prompt_yes_no("?", lambda _: "Y") is True
+
+
+def test_prompt_yes_no_rejects_anything_else():
+    assert _prompt_yes_no("?", lambda _: "n") is False
+    assert _prompt_yes_no("?", lambda _: "") is False
+    assert _prompt_yes_no("?", lambda _: "sure") is False
+
+
+def test_prompt_yes_no_declines_on_eof():
+    def raise_eof(_):
+        raise EOFError
+
+    assert _prompt_yes_no("?", raise_eof) is False
+
+
+# ---------------------------------------------------------------------------
+# --fuzzy-map / --yes interactive retry flow
+# ---------------------------------------------------------------------------
+
+
+def test_fuzzy_map_without_flag_shows_original_error_only(tmp_path, capsys):
+    a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0"])
+    exit_code = main([f"a={a}", f"b={b}"])  # no --fuzzy-map
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err.startswith("Error:")
+    assert "Suggested column mapping" not in captured.out
+
+
+def test_fuzzy_map_shows_suggestion_and_accepts_on_y(tmp_path, capsys):
+    a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0", "2,20.0"])
+    b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0", "2,25.0"])
+    exit_code = main(
+        [f"a={a}", f"b={b}", "--key", "customer_id", "--fuzzy-map"],
+        input_func=lambda _: "y",
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Suggested column mapping:" in out
+    assert "b.cust_id -> customer_id" in out
+    assert "Matched:     1" in out
+    assert "Mismatched:  1" in out
+
+
+def test_fuzzy_map_declines_on_n(tmp_path, capsys):
+    a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0"])
+    exit_code = main(
+        [f"a={a}", f"b={b}", "--key", "customer_id", "--fuzzy-map"],
+        input_func=lambda _: "n",
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Suggested column mapping:" in captured.out
+    assert "Aborted" in captured.err
+
+
+def test_fuzzy_map_yes_flag_skips_prompt_entirely(tmp_path, capsys):
+    a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0"])
+
+    def explode(_):
+        raise AssertionError("input_func should never be called when --yes is set")
+
+    exit_code = main(
+        [f"a={a}", f"b={b}", "--key", "customer_id", "--fuzzy-map", "--yes"],
+        input_func=explode,
+    )
+    assert exit_code == 0
+
+
+def test_fuzzy_map_with_no_suggestions_falls_back_to_original_error(tmp_path, capsys):
+    """Columns different enough that suggest_column_mapping finds nothing --
+    --fuzzy-map shouldn't pretend it can help."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,region", "1,us"])
+    exit_code = main(
+        [f"a={a}", f"b={b}", "--fuzzy-map"],
+        input_func=lambda _: "y",
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err.startswith("Error:")
+    assert "No fuzzy column-mapping suggestions found" in captured.err
