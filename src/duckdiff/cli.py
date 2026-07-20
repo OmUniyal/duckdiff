@@ -1,8 +1,12 @@
-"""Thin CLI wrapper around ComparisonSession.
+"""CLI entry point for duckdiff, split into subcommands.
 
 All comparison logic lives in ComparisonSession; this module only
-handles argument parsing and output formatting, on purpose -- so the
-CLI can never drift from what the library does.
+handles argument parsing, dispatch, and output formatting, on purpose --
+so the CLI can never drift from what the library does.
+
+Subcommands:
+  duckdiff compare ...   -- run a comparison from the command line
+  duckdiff ui             -- launch the local web UI (not yet implemented)
 """
 
 from __future__ import annotations
@@ -30,11 +34,8 @@ def _key_value_float(spec: str) -> tuple[str, float]:
         raise argparse.ArgumentTypeError(f"'{value}' is not a valid number") from exc
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="duckdiff",
-        description="N-way, order-independent comparison of large record files.",
-    )
+def _add_compare_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register every argument specific to `duckdiff compare`."""
     parser.add_argument(
         "sources",
         nargs="+",
@@ -100,6 +101,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the confirmation prompt and auto-accept a suggested "
         "mapping. Only relevant with --fuzzy-map.",
     )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="duckdiff",
+        description="N-way, order-independent comparison of large record files.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    compare_parser = subparsers.add_parser(
+        "compare",
+        help="Compare N sources from the command line.",
+        description="N-way, order-independent comparison of large record files.",
+    )
+    _add_compare_arguments(compare_parser)
+
+    subparsers.add_parser(
+        "ui",
+        help="Launch the local web UI (not yet implemented).",
+        description="Launch duckdiff's local web UI in a browser.",
+    )
+
     return parser
 
 
@@ -151,32 +174,6 @@ def _format_result(result: ComparisonResult) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None, input_func: Callable[[str], str] = input) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    session = ComparisonSession(_build_config(args))
-    for pair in args.sources:
-        if "=" not in pair:
-            parser.error(f"Source '{pair}' must be in name=path format.")
-        name, path = pair.split("=", 1)
-        session.add_source(name, path)
-
-    try:
-        result = session.compare()
-    except SchemaMismatchError as exc:
-        retried = _retry_with_fuzzy_mapping(session, exc, args, input_func)
-        if retried is None:
-            return 1
-        result = retried
-    except (DuckDiffError, ValueError, duckdb.Error) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-
-    print(_format_result(result))
-    return 0
-
-
 def _prompt_yes_no(prompt: str, input_func: Callable[[str], str]) -> bool:
     try:
         answer = input_func(prompt)
@@ -223,6 +220,51 @@ def _retry_with_fuzzy_mapping(
     except (DuckDiffError, ValueError, duckdb.Error) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return None
+
+
+def _run_compare(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    input_func: Callable[[str], str],
+) -> int:
+    session = ComparisonSession(_build_config(args))
+    for pair in args.sources:
+        if "=" not in pair:
+            parser.error(f"Source '{pair}' must be in name=path format.")
+        name, path = pair.split("=", 1)
+        session.add_source(name, path)
+
+    try:
+        result = session.compare()
+    except SchemaMismatchError as exc:
+        retried = _retry_with_fuzzy_mapping(session, exc, args, input_func)
+        if retried is None:
+            return 1
+        result = retried
+    except (DuckDiffError, ValueError, duckdb.Error) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(_format_result(result))
+    return 0
+
+
+def _run_ui(args: argparse.Namespace) -> int:
+    print("duckdiff ui is not implemented yet -- coming in a future phase.", file=sys.stderr)
+    return 1
+
+
+def main(argv: list[str] | None = None, input_func: Callable[[str], str] = input) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "compare":
+        return _run_compare(parser, args, input_func)
+    if args.command == "ui":
+        return _run_ui(args)
+
+    parser.error(f"unknown command '{args.command}'")  # unreachable: required=True guards this
+    raise AssertionError("unreachable")  # appease mypy's return-type check
 
 
 if __name__ == "__main__":

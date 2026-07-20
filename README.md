@@ -101,9 +101,11 @@ src/duckdiff/
 
 ## CLI usage
 
-```
-bash
-duckdiff legacy=legacy.csv new=new.csv --key customer_id \
+`duckdiff` has two subcommands: `compare` (run a comparison) and `ui`
+(launch the local web UI -- not yet implemented).
+
+```bash
+duckdiff compare legacy=legacy.csv new=new.csv --key customer_id \
     --ignore updated_at \
     --tolerance-abs amount=0.01 \
     --sanity-check
@@ -115,6 +117,9 @@ duckdiff legacy=legacy.csv new=new.csv --key customer_id \
 - `--tolerance-abs COLUMN=VALUE` / `--tolerance-rel COLUMN=VALUE` — repeatable;
   a column can have both. Requires `--key`.
 - `--case-insensitive`, `--sanity-check` — flags.
+- `--fuzzy-map` — on a schema mismatch, suggest a column mapping and offer
+  to apply it (with a y/N confirmation) instead of failing outright.
+  `--yes`/`-y` skips the confirmation.
 
 Errors (schema mismatches, invalid config) print a single `Error: ...` line
 to stderr and exit 1 — not a Python traceback.
