@@ -125,6 +125,23 @@ Errors (schema mismatches, invalid config) print a single `Error: ...` line
 to stderr and exit 1 — not a Python traceback.
 
 
+## UI (in progress)
+
+```bash
+pip install -e ".[ui]"
+duckdiff ui
+```
+
+Launches a local Streamlit app in your browser. Sources are referenced by
+**file path only, never uploaded** -- DuckDB reads straight off disk, same
+as the CLI, so large files never pass through the app as raw bytes.
+
+Currently implemented: a dynamic add/remove list of sources, key columns,
+case-insensitivity, and sanity-check mode, with a working Compare button.
+Not yet implemented: `--ignore`/tolerance rules, and the fuzzy-mapping
+flow -- both work from the CLI already, just not the UI yet.
+
+
 ## Known limitations
 
 - **CLI errors from DuckDB are passed through verbatim.** `duckdiff`'s own
@@ -145,8 +162,10 @@ to stderr and exit 1 — not a Python traceback.
 - [x] Fuzzy column-mapping suggestions
 - [x] CLI: full argument surface (ignore/tolerance/case/sanity-check), friendly errors
 - [x] CLI: interactive fuzzy-mapping flow (suggest -> confirm -> apply)
+- [x] UI: core plumbing -- dynamic source list, key columns, Compare, `duckdiff ui` launcher
+- [ ] UI: full parameter parity (ignore, tolerance, case-insensitive, sanity-check)
+- [ ] UI: interactive fuzzy-mapping flow
 - [ ] `--dry-run` cost preview for large comparisons
-- [ ] UI (thin wrapper over `ComparisonSession`, TBD)
 
 ## License
 

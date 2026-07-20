@@ -12,8 +12,11 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 import duckdb
 
@@ -249,19 +252,41 @@ def _run_compare(
     return 0
 
 
-def _run_ui(args: argparse.Namespace) -> int:
-    print("duckdiff ui is not implemented yet -- coming in a future phase.", file=sys.stderr)
-    return 1
+def _run_ui(
+    args: argparse.Namespace,
+    runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+) -> int:
+    try:
+        import streamlit  # noqa: F401
+    except ImportError:
+        print(
+            "Error: the UI requires the 'ui' extra. Install with: pip install 'duckdiff[ui]'",
+            file=sys.stderr,
+        )
+        return 1
+
+    app_path = Path(__file__).parent / "ui" / "app.py"
+    # Suppress Streamlit's first-run telemetry/email prompt -- someone
+    # running `duckdiff ui` shouldn't see a prompt that looks like it's
+    # coming from duckdiff itself, especially the less terminal-comfortable
+    # users this UI is meant for.
+    env = {**os.environ, "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false"}
+    result = runner([sys.executable, "-m", "streamlit", "run", str(app_path)], env=env)
+    return result.returncode
 
 
-def main(argv: list[str] | None = None, input_func: Callable[[str], str] = input) -> int:
+def main(
+    argv: list[str] | None = None,
+    input_func: Callable[[str], str] = input,
+    ui_runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "compare":
         return _run_compare(parser, args, input_func)
     if args.command == "ui":
-        return _run_ui(args)
+        return _run_ui(args, ui_runner)
 
     parser.error(f"unknown command '{args.command}'")  # unreachable: required=True guards this
     raise AssertionError("unreachable")  # appease mypy's return-type check

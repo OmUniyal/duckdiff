@@ -1,4 +1,7 @@
 import argparse
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -43,11 +46,43 @@ def test_ui_subcommand_parses_with_no_arguments():
     assert args.command == "ui"
 
 
-def test_ui_subcommand_reports_not_implemented(capsys):
-    exit_code = main(["ui"])
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "not implemented yet" in captured.err
+def test_ui_subcommand_launches_streamlit_with_the_app_path():
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, returncode=0)
+
+    exit_code = main(["ui"], ui_runner=fake_runner)
+    assert exit_code == 0
+    assert len(calls) == 1
+    cmd, kwargs = calls[0]
+    assert cmd[0] == sys.executable
+    assert cmd[1:3] == ["-m", "streamlit"]
+    assert cmd[3] == "run"
+    assert cmd[4].endswith(str(Path("ui") / "app.py"))
+
+
+def test_ui_subcommand_suppresses_telemetry_prompt():
+    """Streamlit's first-run flow asks for an email as part of its own
+    telemetry opt-in -- someone running `duckdiff ui` shouldn't see a
+    prompt that looks like it's coming from duckdiff itself."""
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, returncode=0)
+
+    main(["ui"], ui_runner=fake_runner)
+    _, kwargs = calls[0]
+    assert kwargs["env"]["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] == "false"
+
+
+def test_ui_subcommand_propagates_streamlit_exit_code():
+    exit_code = main(
+        ["ui"], ui_runner=lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, returncode=3)
+    )
+    assert exit_code == 3
 
 
 # ---------------------------------------------------------------------------
