@@ -66,7 +66,11 @@ def test_ui_subcommand_launches_streamlit_with_the_app_path():
 def test_ui_subcommand_suppresses_telemetry_prompt():
     """Streamlit's first-run flow asks for an email as part of its own
     telemetry opt-in -- someone running `duckdiff ui` shouldn't see a
-    prompt that looks like it's coming from duckdiff itself."""
+    prompt that looks like it's coming from duckdiff itself.
+
+    The prompt is specifically gated by server.showEmailPrompt --
+    browser.gatherUsageStats alone does NOT skip the prompt, only
+    whether stats get sent afterward, so both must be checked."""
     calls = []
 
     def fake_runner(cmd, **kwargs):
@@ -75,6 +79,7 @@ def test_ui_subcommand_suppresses_telemetry_prompt():
 
     main(["ui"], ui_runner=fake_runner)
     _, kwargs = calls[0]
+    assert kwargs["env"]["STREAMLIT_SERVER_SHOW_EMAIL_PROMPT"] == "false"
     assert kwargs["env"]["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] == "false"
 
 

@@ -266,11 +266,20 @@ def _run_ui(
         return 1
 
     app_path = Path(__file__).parent / "ui" / "app.py"
-    # Suppress Streamlit's first-run telemetry/email prompt -- someone
-    # running `duckdiff ui` shouldn't see a prompt that looks like it's
-    # coming from duckdiff itself, especially the less terminal-comfortable
-    # users this UI is meant for.
-    env = {**os.environ, "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false"}
+        # Suppress Streamlit's first-run email prompt. This is gated by
+        # server.showEmailPrompt specifically -- browser.gatherUsageStats
+        # alone does NOT skip the prompt, only whether stats get sent
+        # afterward. We deliberately don't use server.headless to suppress
+        # it instead, since headless mode also disables Streamlit's
+        # automatic browser-opening, which is the whole point of `duckdiff
+        # ui`. (Confirmed empirically: server.headless was masking this bug
+        # in earlier testing, since it happens to suppress the prompt for
+        # an unrelated reason.)
+    env = {
+        **os.environ,
+        "STREAMLIT_SERVER_SHOW_EMAIL_PROMPT": "false",
+        "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false",
+    }
     result = runner([sys.executable, "-m", "streamlit", "run", str(app_path)], env=env)
     return result.returncode
 
