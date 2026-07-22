@@ -132,3 +132,121 @@ def test_compare_ignores_sources_with_blank_name_or_path(tmp_path):
     assert len(at.error) == 0
     markdown_text = "\n".join(m.value for m in at.markdown)
     assert "**Matched:** 1" in markdown_text
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy-mapping retry flow
+# ---------------------------------------------------------------------------
+
+
+def _set_two_sources(at, a_path, b_path):
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a_path).run()
+    at.text_input(key=f"path_{b_id}").set_value(b_path).run()
+
+
+def test_schema_mismatch_shows_error_and_suggest_button(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    _set_two_sources(at, a, b)
+    at.text_input(key="key_columns_input").set_value("customer_id").run()
+
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 1
+    assert at.error[0].value.startswith("Error:")
+    assert _find_button(at, "Suggest column mapping") is not None
+
+
+def test_error_message_persists_after_clicking_suggest(tmp_path):
+    """Regression test for the exact bug the pending_error session_state
+    was built to avoid: a one-off st.error() call inside the Compare
+    handler would vanish on the NEXT rerun (clicking Suggest), since
+    Streamlit reruns the whole script and that handler doesn't execute
+    again on this click."""
+    a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    _set_two_sources(at, a, b)
+    at.text_input(key="key_columns_input").set_value("customer_id").run()
+    _find_button(at, "Compare").click().run()
+
+    _find_button(at, "Suggest column mapping").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 1  # still showing the ORIGINAL schema error
+    assert at.error[0].value.startswith("Error:")
+
+
+def test_suggest_then_apply_and_retry_succeeds(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0", "2,20.0"])
+    b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0", "2,25.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    _set_two_sources(at, a, b)
+    at.text_input(key="key_columns_input").set_value("customer_id").run()
+    _find_button(at, "Compare").click().run()
+    _find_button(at, "Suggest column mapping").click().run()
+
+    assert at.session_state.suggested_mapping == {"b": {"cust_id": "customer_id"}}
+
+    _find_button(at, "Apply and retry").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 0
+    markdown_text = "\n".join(m.value for m in at.markdown)
+    assert "**Matched:** 1" in markdown_text
+    assert "**Mismatched:** 1" in markdown_text
+    # The retry flow should be fully torn down after a successful retry.
+    assert at.session_state.pending_session is None
+
+
+def test_no_suggestions_available_shows_info_message(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,region", "1,us"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    _set_two_sources(at, a, b)
+
+    _find_button(at, "Compare").click().run()
+    _find_button(at, "Suggest column mapping").click().run()
+
+    assert not at.exception
+    assert len(at.info) == 1
+    assert "No fuzzy column-mapping suggestions found" in at.info[0].value
+
+
+def test_new_compare_click_abandons_unfinished_retry_flow(tmp_path):
+    """Clicking Compare again (e.g. after fixing a path) while a fuzzy-
+    mapping flow is still pending should cleanly close the old session,
+    not leak it or crash."""
+    a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0"])
+    a2 = _write_csv(tmp_path, "a2.csv", ["id,amount", "1,10.0"])
+    b2 = _write_csv(tmp_path, "b2.csv", ["id,amount", "1,10.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    _set_two_sources(at, a, b)
+    at.text_input(key="key_columns_input").set_value("customer_id").run()
+    _find_button(at, "Compare").click().run()
+    assert at.session_state.pending_session is not None
+
+    _set_two_sources(at, a2, b2)
+    at.text_input(key="key_columns_input").set_value("id").run()
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 0
+    markdown_text = "\n".join(m.value for m in at.markdown)
+    assert "**Matched:** 1" in markdown_text
+    assert at.session_state.pending_session is None
