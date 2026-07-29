@@ -38,18 +38,20 @@ class ComparisonConfig:
     tolerances: list[ToleranceRule] = field(default_factory=list)
     case_sensitive: bool = True
 
-    # Fuzzy column-name matching across sources. Suggestions are always
-    # surfaced for review via ComparisonSession.suggest_column_mapping();
-    # this flag only controls whether compare() is willing to run at all
-    # when schemas don't line up exactly, using an *explicitly accepted*
-    # mapping — it never causes a mapping to be guessed and applied silently.
     enable_fuzzy_column_mapping: bool = False
     fuzzy_match_threshold: float = 0.6
 
-    # Sanity-check mode: run cheap pre-flight checks (row counts, column
-    # overlap, dtype compatibility) and report them before doing the full
-    # comparison. Useful for catching obviously-wrong file pairs early.
     sanity_check_mode: bool = False
 
-    # Streaming chunk size (rows) for out-of-core processing via DuckDB.
+    # Bounded, in-memory preview of mismatched rows (see
+    # results.MismatchSample), returned as part of ComparisonResult.
+    # Requires key_columns for the same reason tolerances do -- "which
+    # column differs for this row" needs an aligned row to compare
+    # against, which only exists in keyed mode. For full, unbounded
+    # mismatch/only-in detail, use ComparisonSession.export_mismatches()
+    # instead of raising this number -- that path streams to disk rather
+    # than holding everything in memory.
+    include_mismatch_samples: bool = False
+    mismatch_sample_size: int = 3
+
     chunk_size: int = 1_000_000

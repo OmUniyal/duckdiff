@@ -11,6 +11,7 @@ from typing import Any
 
 import duckdb
 
+from duckdiff.comparator import export_mismatches as _export_mismatches
 from duckdiff.comparator import get_source_columns, run_comparison
 from duckdiff.config import ComparisonConfig
 from duckdiff.exceptions import ConfigurationError
@@ -90,6 +91,19 @@ class ComparisonSession:
             connection=self._connection,
             column_mapping=self._column_mapping or None,
         )
+
+    def export_mismatches(self, output_path: str) -> None:
+            """Write the full mismatch and only-in detail to disk.
+            Requires config.key_columns."""
+            if len(self._sources) < 2:
+                raise ValueError("Need at least 2 sources to export mismatches.")
+            _export_mismatches(
+                self._sources,
+                self.config,
+                output_path,
+                connection=self._connection,
+                column_mapping=self._column_mapping or None,
+            )
 
     def close(self) -> None:
         self._connection.close()

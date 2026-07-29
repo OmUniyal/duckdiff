@@ -1,19 +1,20 @@
+import csv
+
 import pytest
 
-from duckdiff.comparator import run_comparison
+from duckdiff.comparator import export_mismatches, run_comparison
 from duckdiff.config import ComparisonConfig, ToleranceRule
 from duckdiff.exceptions import ConfigurationError, SchemaMismatchError
 
 
 def _write_csv(tmp_path, name, rows):
-    """rows: list of lines, first line is the header."""
     path = tmp_path / name
     path.write_text("\n".join(rows) + "\n")
     return str(path)
 
 
 # ---------------------------------------------------------------------------
-# Full-row (no key_columns) mode: a row's entire content is its identity.
+# Full-row (no key_columns) mode
 # ---------------------------------------------------------------------------
 
 
@@ -30,14 +31,11 @@ def test_full_row_disjoint_rows_are_only_in(tmp_path):
     a = _write_csv(tmp_path, "a.csv", ["id,name,amount", "1,alice,10.0", "2,bob,20.0"])
     b = _write_csv(tmp_path, "b.csv", ["id,name,amount", "1,alice,10.0", "3,carol,30.0"])
     result = run_comparison({"a": a, "b": b}, ComparisonConfig())
-    assert result.matched_row_count == 1  # only id=1 row is identical in both
-    assert result.only_in == {"a": 1, "b": 1}  # id=2 row vs id=3 row
+    assert result.matched_row_count == 1
+    assert result.only_in == {"a": 1, "b": 1}
 
 
 def test_full_row_mismatched_row_count_is_always_zero(tmp_path):
-    """In full-row mode there's no concept of 'same identity, different
-    content' -- a row that differs at all is simply not part of the
-    intersection, and shows up in only_in instead."""
     a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
     b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,99.0"])
     result = run_comparison({"a": a, "b": b}, ComparisonConfig())
@@ -46,8 +44,6 @@ def test_full_row_mismatched_row_count_is_always_zero(tmp_path):
 
 
 def test_full_row_duplicate_rows_use_bag_semantics(tmp_path):
-    """3x of a row in 'a' and 2x of the same row in 'b' should match 2
-    (min of the two counts), leaving 1 unmatched copy in 'a'."""
     a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0", "1,10.0", "1,10.0"])
     b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0", "1,10.0"])
     result = run_comparison({"a": a, "b": b}, ComparisonConfig())
@@ -57,17 +53,15 @@ def test_full_row_duplicate_rows_use_bag_semantics(tmp_path):
 
 def test_full_row_three_way(tmp_path):
     a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0", "2,20.0", "3,30.0"])
-    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0", "2,25.0"])  # 3 missing, 2 differs
-    # 3 missing from b and c; 4 only in c
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0", "2,25.0"])
     c = _write_csv(tmp_path, "c.csv", ["id,amount", "1,10.0", "2,20.0", "4,40.0"])
     result = run_comparison({"a": a, "b": b, "c": c}, ComparisonConfig())
-    # Only id=1's row is identical across all three sources.
     assert result.matched_row_count == 1
     assert result.only_in == {"a": 2, "b": 1, "c": 2}
 
 
 # ---------------------------------------------------------------------------
-# Keyed mode: rows are aligned by key_columns, then diffed column-by-column.
+# Keyed mode
 # ---------------------------------------------------------------------------
 
 
@@ -76,14 +70,14 @@ def test_keyed_matched_and_mismatched(tmp_path):
     b = _write_csv(tmp_path, "b.csv", ["id,name,amount", "1,alice,10.0", "2,bob,25.0"])
     config = ComparisonConfig(key_columns=["id"])
     result = run_comparison({"a": a, "b": b}, config)
-    assert result.matched_row_count == 1  # id=1
-    assert result.mismatched_row_count == 1  # id=2, amount differs
+    assert result.matched_row_count == 1
+    assert result.mismatched_row_count == 1
     assert result.only_in == {"a": 0, "b": 0}
 
 
 def test_keyed_only_in_tracks_missing_keys(tmp_path):
     a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0", "2,20.0"])
-    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])  # id=2 missing entirely
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
     config = ComparisonConfig(key_columns=["id"])
     result = run_comparison({"a": a, "b": b}, config)
     assert result.matched_row_count == 1
@@ -106,13 +100,12 @@ def test_keyed_three_way(tmp_path):
     c = _write_csv(tmp_path, "c.csv", ["id,amount", "1,10.0", "2,20.0", "4,40.0"])
     config = ComparisonConfig(key_columns=["id"])
     result = run_comparison({"a": a, "b": b, "c": c}, config)
-    assert result.matched_row_count == 1  # id=1
-    assert result.mismatched_row_count == 1  # id=2, present in all 3, amount disagrees
-    assert result.only_in == {"a": 1, "b": 0, "c": 1}  # id=3 (a only), id=4 (c only)
+    assert result.matched_row_count == 1
+    assert result.mismatched_row_count == 1
+    assert result.only_in == {"a": 1, "b": 0, "c": 1}
 
 
 def test_keyed_null_safe_equality(tmp_path):
-    """NULL should compare equal to NULL, not propagate to 'mismatched'."""
     a = _write_csv(tmp_path, "a.csv", ["id,note", "1,", "2,hello"])
     b = _write_csv(tmp_path, "b.csv", ["id,note", "1,", "2,hello"])
     config = ComparisonConfig(key_columns=["id"])
@@ -164,10 +157,10 @@ def test_tolerance_absolute_outside_bound_mismatches(tmp_path):
 
 def test_tolerance_relative_within_bound_matches(tmp_path):
     a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,1000.0"])
-    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,1005.0"])  # 0.5% off
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,1005.0"])
     config = ComparisonConfig(
         key_columns=["id"],
-        tolerances=[ToleranceRule(column="amount", relative=0.01)],  # 1% allowed
+        tolerances=[ToleranceRule(column="amount", relative=0.01)],
     )
     result = run_comparison({"a": a, "b": b}, config)
     assert result.matched_row_count == 1
@@ -177,7 +170,7 @@ def test_tolerance_requires_key_columns(tmp_path):
     a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
     b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
     config = ComparisonConfig(tolerances=[ToleranceRule(column="amount", absolute=0.1)])
-    with pytest.raises(ConfigurationError, match="require key_columns"):
+    with pytest.raises(ConfigurationError, match="key_columns"):
         run_comparison({"a": a, "b": b}, config)
 
 
@@ -223,7 +216,7 @@ def test_schema_mismatch_raises_with_details(tmp_path):
 
 def test_column_mapping_reconciles_renamed_columns(tmp_path):
     a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
-    b = _write_csv(tmp_path, "b.csv", ["id,total", "1,10.0"])  # 'total' vs 'amount'
+    b = _write_csv(tmp_path, "b.csv", ["id,total", "1,10.0"])
     config = ComparisonConfig(key_columns=["id"])
     mapping = {"b": {"total": "amount"}}
     result = run_comparison({"a": a, "b": b}, config, column_mapping=mapping)
@@ -232,24 +225,20 @@ def test_column_mapping_reconciles_renamed_columns(tmp_path):
 
 
 def test_column_mapping_only_renames_mapped_columns(tmp_path):
-    """Columns not mentioned in the mapping keep their original name --
-    confirms partial mappings work, not just fully-specified ones."""
     a = _write_csv(tmp_path, "a.csv", ["id,amount,note", "1,10.0,hi"])
     b = _write_csv(tmp_path, "b.csv", ["id,total,note", "1,10.0,hi"])
     config = ComparisonConfig(key_columns=["id"])
-    mapping = {"b": {"total": "amount"}}  # 'note' already matches, left alone
+    mapping = {"b": {"total": "amount"}}
     result = run_comparison({"a": a, "b": b}, config, column_mapping=mapping)
     assert result.matched_row_count == 1
 
 
 def test_no_mapping_still_requires_exact_schema_match(tmp_path):
-    """Regression: passing column_mapping=None (the default) must behave
-    exactly as before -- this is the safety net for the 'nothing applied
-    unless explicitly given' guarantee."""
     a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
     b = _write_csv(tmp_path, "b.csv", ["id,total", "1,10.0"])
     with pytest.raises(SchemaMismatchError):
         run_comparison({"a": a, "b": b}, ComparisonConfig())
+
 
 # ---------------------------------------------------------------------------
 # Sanity-check mode
@@ -273,3 +262,186 @@ def test_sanity_check_mode_off_by_default_produces_no_warnings(tmp_path):
     b = _write_csv(tmp_path, "b.csv", b_rows)
     result = run_comparison({"a": a, "b": b}, ComparisonConfig(key_columns=["id"]))
     assert result.warnings == []
+
+
+# ---------------------------------------------------------------------------
+# Mismatch samples (bounded, in-result preview)
+# ---------------------------------------------------------------------------
+
+
+def test_mismatch_samples_disabled_by_default(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,20.0"])
+    result = run_comparison({"a": a, "b": b}, ComparisonConfig(key_columns=["id"]))
+    assert result.mismatch_samples == []
+
+
+def test_mismatch_samples_requires_key_columns(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+    config = ComparisonConfig(include_mismatch_samples=True)
+    with pytest.raises(ConfigurationError, match="key_columns"):
+        run_comparison({"a": a, "b": b}, config)
+
+
+def test_mismatch_samples_captures_differing_columns(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,region", "1,10.0,us"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount,region", "1,20.0,eu"])
+    config = ComparisonConfig(key_columns=["id"], include_mismatch_samples=True)
+    result = run_comparison({"a": a, "b": b}, config)
+
+    assert len(result.mismatch_samples) == 1
+    sample = result.mismatch_samples[0]
+    assert sample.key == {"id": 1}
+    # CSV parsing returns strings for all values
+    assert sample.differences == {
+        "amount": {"a": "10.0", "b": "20.0"},
+        "region": {"a": "us", "b": "eu"},
+    }
+
+
+def test_mismatch_samples_groups_by_key_not_scattered(tmp_path):
+    """A single row that differs on two columns should produce ONE sample
+    with two entries in `differences`, not two separate samples."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,region", "1,10.0,us", "2,20.0,us"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount,region", "1,99.0,eu", "2,20.0,us"])
+    config = ComparisonConfig(key_columns=["id"], include_mismatch_samples=True)
+    result = run_comparison({"a": a, "b": b}, config)
+
+    assert len(result.mismatch_samples) == 1
+    assert set(result.mismatch_samples[0].differences) == {"amount", "region"}
+
+
+def test_mismatch_samples_respects_sample_size_limit(tmp_path):
+    a_rows = ["id,amount"] + [f"{i},10.0" for i in range(10)]
+    b_rows = ["id,amount"] + [f"{i},99.0" for i in range(10)]
+    a = _write_csv(tmp_path, "a.csv", a_rows)
+    b = _write_csv(tmp_path, "b.csv", b_rows)
+    config = ComparisonConfig(
+        key_columns=["id"], include_mismatch_samples=True, mismatch_sample_size=3
+    )
+    result = run_comparison({"a": a, "b": b}, config)
+    assert result.mismatched_row_count == 10
+    assert len(result.mismatch_samples) == 3
+
+
+def test_mismatch_samples_three_way(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+    c = _write_csv(tmp_path, "c.csv", ["id,amount", "1,99.0"])
+    config = ComparisonConfig(key_columns=["id"], include_mismatch_samples=True)
+    result = run_comparison({"a": a, "b": b, "c": c}, config)
+
+    assert len(result.mismatch_samples) == 1
+    assert result.mismatch_samples[0].differences["amount"] == {
+        "a": "10.0",
+        "b": "10.0",
+        "c": "99.0",
+    }
+
+
+def test_mismatch_samples_ignore_tolerance_matched_values(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.00"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.02"])
+    config = ComparisonConfig(
+        key_columns=["id"],
+        include_mismatch_samples=True,
+        tolerances=[ToleranceRule(column="amount", absolute=0.05)],
+    )
+    result = run_comparison({"a": a, "b": b}, config)
+    assert result.mismatched_row_count == 0
+    assert result.mismatch_samples == []
+
+
+# ---------------------------------------------------------------------------
+# export_mismatches (full, unbounded, streamed to disk)
+# ---------------------------------------------------------------------------
+
+
+def _read_csv_rows(path):
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def test_export_mismatches_requires_key_columns(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+    with pytest.raises(ConfigurationError, match="key_columns"):
+        export_mismatches({"a": a, "b": b}, ComparisonConfig(), str(tmp_path / "out.csv"))
+
+
+def test_export_mismatches_writes_melted_mismatches_file(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,region", "1,10.0,us", "2,20.0,us"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount,region", "1,99.0,eu", "2,20.0,us"])
+    config = ComparisonConfig(key_columns=["id"])
+    out = str(tmp_path / "result.csv")
+    export_mismatches({"a": a, "b": b}, config, out)
+
+    rows = _read_csv_rows(tmp_path / "result_mismatches.csv")
+    by_column = {r["column"]: r for r in rows}
+    assert set(by_column) == {"amount", "region"}
+    assert by_column["amount"]["a_value"] == "10.0"
+    assert by_column["amount"]["b_value"] == "99.0"
+    assert by_column["region"]["a_value"] == "us"
+    assert by_column["region"]["b_value"] == "eu"
+
+
+def test_export_mismatches_writes_only_in_files_with_full_source_columns(tmp_path):
+    """Fix #1: an only-in row shows ALL of that source's columns, including
+    ones ignored for comparison purposes."""
+    a = _write_csv(
+        tmp_path,
+        "a.csv",
+        ["id,amount,notes", "1,10.0,shared-row", "3,30.0,unique-to-a"],
+    )
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0", "4,40.0"])
+    config = ComparisonConfig(key_columns=["id"], ignore_columns=["notes"])
+    out = str(tmp_path / "result.csv")
+    export_mismatches({"a": a, "b": b}, config, out)
+
+    only_in_a = _read_csv_rows(tmp_path / "result_only_in_a.csv")
+    assert len(only_in_a) == 1
+    assert only_in_a[0]["id"] == "3"
+    assert only_in_a[0]["notes"] == "unique-to-a"
+
+    only_in_b = _read_csv_rows(tmp_path / "result_only_in_b.csv")
+    assert len(only_in_b) == 1
+    assert only_in_b[0]["id"] == "4"
+
+
+def test_export_writes_header_only_files_when_nothing_to_report(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+    config = ComparisonConfig(key_columns=["id"])
+    out = str(tmp_path / "result.csv")
+    export_mismatches({"a": a, "b": b}, config, out)
+
+    assert _read_csv_rows(tmp_path / "result_mismatches.csv") == []
+    assert _read_csv_rows(tmp_path / "result_only_in_a.csv") == []
+    assert _read_csv_rows(tmp_path / "result_only_in_b.csv") == []
+    with open(tmp_path / "result_mismatches.csv") as f:
+        assert f.readline().strip() == "id,column,a_value,b_value"
+
+
+def test_export_derives_filenames_from_given_path(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,99.0"])
+    config = ComparisonConfig(key_columns=["id"])
+    export_mismatches({"a": a, "b": b}, config, str(tmp_path / "my_report.csv"))
+
+    assert (tmp_path / "my_report_mismatches.csv").exists()
+    assert (tmp_path / "my_report_only_in_a.csv").exists()
+    assert (tmp_path / "my_report_only_in_b.csv").exists()
+
+
+def test_export_three_way_creates_one_only_in_file_per_source(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0", "2,20.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0", "3,30.0"])
+    c = _write_csv(tmp_path, "c.csv", ["id,amount", "1,10.0", "4,40.0"])
+    config = ComparisonConfig(key_columns=["id"])
+    out = str(tmp_path / "result.csv")
+    export_mismatches({"a": a, "b": b, "c": c}, config, out)
+
+    assert len(_read_csv_rows(tmp_path / "result_only_in_a.csv")) == 1
+    assert len(_read_csv_rows(tmp_path / "result_only_in_b.csv")) == 1
+    assert len(_read_csv_rows(tmp_path / "result_only_in_c.csv")) == 1
