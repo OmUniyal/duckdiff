@@ -15,6 +15,7 @@ import duckdb
 import streamlit as st
 
 from duckdiff.config import ComparisonConfig
+from duckdiff.config import ComparisonConfig, ToleranceRule
 from duckdiff.exceptions import DuckDiffError, SchemaMismatchError
 from duckdiff.results import ComparisonResult
 from duckdiff.session import ComparisonSession
@@ -68,11 +69,43 @@ def _render_sources() -> None:
         st.rerun()
 
 
+def _parse_kv_floats(raw: str) -> list[tuple[str, float]]:
+    """Parse a comma-separated 'column=value' string into (column, float) pairs.
+    Silently skips malformed entries so a half-typed input doesn't block compare."""
+    result = []
+    for item in raw.split(","):
+        item = item.strip()
+        if "=" not in item:
+            continue
+        col, _, val = item.partition("=")
+        col = col.strip()
+        try:
+            result.append((col, float(val.strip())))
+        except ValueError:
+            continue
+    return result
+
+
 def _build_config() -> ComparisonConfig:
     raw_keys = st.session_state.get("key_columns_input", "")
     key_columns = [c.strip() for c in raw_keys.split(",") if c.strip()]
+
+    raw_ignore = st.session_state.get("ignore_columns_input", "")
+    ignore_columns = [c.strip() for c in raw_ignore.split(",") if c.strip()]
+
+    abs_pairs = _parse_kv_floats(st.session_state.get("tolerance_abs_input", ""))
+    rel_pairs = _parse_kv_floats(st.session_state.get("tolerance_rel_input", ""))
+    tolerance_by_col: dict[str, ToleranceRule] = {}
+    for col, val in abs_pairs:
+        tolerance_by_col.setdefault(col, ToleranceRule(column=col)).absolute = val
+    for col, val in rel_pairs:
+        tolerance_by_col.setdefault(col, ToleranceRule(column=col)).relative = val
+    tolerances = list(tolerance_by_col.values())
+
     return ComparisonConfig(
         key_columns=key_columns,
+        ignore_columns=ignore_columns,
+        tolerances=tolerances,
         case_sensitive=not st.session_state.get("case_insensitive", False),
         sanity_check_mode=st.session_state.get("sanity_check", False),
         enable_fuzzy_column_mapping=True,
@@ -273,6 +306,21 @@ def main() -> None:
         "Key columns (comma-separated)",
         key="key_columns_input",
         help="Leave blank for full-row (order-independent, duplicate-aware) comparison.",
+    )
+    st.text_input(
+        "Ignore columns (comma-separated)",
+        key="ignore_columns_input",
+        help="Columns to exclude from comparison entirely, e.g. updated_at, created_at.",
+    )
+    st.text_input(
+        "Absolute tolerances (e.g. amount=0.01, qty=5)",
+        key="tolerance_abs_input",
+        help="Per-column absolute tolerance. Requires key columns.",
+    )
+    st.text_input(
+        "Relative tolerances (e.g. amount=0.01 means within 1%)",
+        key="tolerance_rel_input",
+        help="Per-column relative tolerance as a fraction. Requires key columns.",
     )
     st.checkbox("Case-insensitive", key="case_insensitive")
     st.checkbox("Sanity check", key="sanity_check")

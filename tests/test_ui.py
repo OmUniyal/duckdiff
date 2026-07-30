@@ -402,3 +402,101 @@ def test_new_compare_click_abandons_unfinished_retry_flow(tmp_path):
     markdown_text = "\n".join(m.value for m in at.markdown)
     assert "**Matched:** 1" in markdown_text
     assert at.session_state.pending_session is None
+
+
+# ---------------------------------------------------------------------------
+# Parameter parity -- ignore columns and tolerance rules
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_columns_excludes_from_comparison(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,note", "1,10.0,x"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount,note", "1,10.0,y"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+    at.text_input(key="ignore_columns_input").set_value("note").run()
+
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 0
+    markdown_text = "\n".join(m.value for m in at.markdown)
+    assert "**Matched:** 1" in markdown_text
+    assert "**Mismatched:** 0" in markdown_text
+
+
+def test_tolerance_abs_wired_into_config(tmp_path):
+    """amount differs by 0.03 -- without tolerance it mismatches,
+    with absolute tolerance of 0.05 it should match."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.00"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.03"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+    at.text_input(key="tolerance_abs_input").set_value("amount=0.05").run()
+
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 0
+    markdown_text = "\n".join(m.value for m in at.markdown)
+    assert "**Matched:** 1" in markdown_text
+    assert "**Mismatched:** 0" in markdown_text
+
+
+def test_tolerance_rel_wired_into_config(tmp_path):
+    """1005 vs 1000 is 0.5% -- within 1% relative tolerance."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,1000.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,1005.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+    at.text_input(key="tolerance_rel_input").set_value("amount=0.01").run()
+
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 0
+    markdown_text = "\n".join(m.value for m in at.markdown)
+    assert "**Matched:** 1" in markdown_text
+
+
+def test_malformed_tolerance_input_silently_skipped(tmp_path):
+    """A half-typed tolerance like 'amount=' shouldn't crash the app --
+    _parse_kv_floats skips entries it can't parse."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+    at.text_input(key="tolerance_abs_input").set_value("amount=").run()
+
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 0
