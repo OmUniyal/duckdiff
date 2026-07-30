@@ -9,6 +9,7 @@ through this process's memory as raw bytes.
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import duckdb
 import streamlit as st
@@ -25,17 +26,13 @@ _STATE_DEFAULTS = {
     "pending_error": None,
     "suggested_mapping": None,
     "last_result_markdown": None,
+    "last_result": None,
     "last_error": None,
+    "result_session": None,
 }
 
 
 def _new_source(name: str) -> dict[str, str]:
-    # A stable id assigned once at creation, NOT the list index -- if we
-    # keyed widgets by index, removing a source from the middle of the
-    # list would shift every later source's index down by one, and
-    # Streamlit's widget state (keyed by that index) would then show
-    # each shifted row's OLD stale value instead of its actual current
-    # one. A stable per-row id sidesteps that entirely.
     return {"id": uuid.uuid4().hex, "name": name, "path": ""}
 
 
@@ -78,14 +75,19 @@ def _build_config() -> ComparisonConfig:
         key_columns=key_columns,
         case_sensitive=not st.session_state.get("case_insensitive", False),
         sanity_check_mode=st.session_state.get("sanity_check", False),
-        # Always on in the UI. Unlike the CLI (where --fuzzy-map and --yes
-        # are two separate, deliberate flags a script could pass without a
-        # human present), here the "Apply and retry" button click itself
-        # IS the explicit, in-the-moment human consent -- there's no
-        # unattended caller in this surface who could trigger a mapping
-        # apply without a person clicking it.
         enable_fuzzy_column_mapping=True,
+        include_mismatch_samples=bool(key_columns),
+        mismatch_sample_size=3,
     )
+
+
+def _default_export_path() -> str:
+    """Derive a sensible default export path from source a's location."""
+    for source in st.session_state.sources:
+        if source["name"] == "a" and source["path"]:
+            parent = Path(source["path"]).parent
+            return str(parent / "duckdiff_result.csv")
+    return "duckdiff_result.csv"
 
 
 def _format_result_markdown(result: ComparisonResult) -> str:
@@ -109,8 +111,6 @@ def _format_result_markdown(result: ComparisonResult) -> str:
 
 
 def _close_pending_session() -> None:
-    """Tear down any in-progress fuzzy-mapping retry flow, closing its
-    DuckDB connection."""
     if st.session_state.pending_session is not None:
         st.session_state.pending_session.close()
     st.session_state.pending_session = None
@@ -118,12 +118,17 @@ def _close_pending_session() -> None:
     st.session_state.suggested_mapping = None
 
 
+def _close_result_session() -> None:
+    if st.session_state.result_session is not None:
+        st.session_state.result_session.close()
+    st.session_state.result_session = None
+
+
 def _reset_display_state() -> None:
-    """Clear everything shown from a previous attempt -- called at the
-    start of a fresh Compare click, so an old result/error doesn't linger
-    alongside a brand new attempt."""
     _close_pending_session()
+    _close_result_session()
     st.session_state.last_result_markdown = None
+    st.session_state.last_result = None
     st.session_state.last_error = None
 
 
@@ -139,9 +144,6 @@ def _run_compare() -> None:
     try:
         result = session.compare()
     except SchemaMismatchError as exc:
-        # Keep the session (and its connection) alive -- the fuzzy-mapping
-        # flow below needs to call suggest_column_mapping() and, if
-        # accepted, compare() again on this SAME session.
         st.session_state.pending_session = session
         st.session_state.pending_error = str(exc)
     except (DuckDiffError, ValueError, duckdb.Error) as exc:
@@ -149,7 +151,10 @@ def _run_compare() -> None:
         session.close()
     else:
         st.session_state.last_result_markdown = _format_result_markdown(result)
-        session.close()
+        st.session_state.last_result = result
+        # Keep session alive -- export_mismatches() needs the same
+        # connection and registered source views to still be open.
+        st.session_state.result_session = session
 
 
 def _render_fuzzy_mapping_flow() -> None:
@@ -157,10 +162,6 @@ def _render_fuzzy_mapping_flow() -> None:
     if session is None:
         return
 
-    # Re-displayed on EVERY rerun while pending, not just the run where
-    # Compare was clicked -- Streamlit reruns the whole script on each
-    # subsequent click (e.g. "Suggest column mapping"), and a one-off
-    # st.error() call inside _run_compare() would vanish on that next run.
     st.error(f"Error: {st.session_state.pending_error}")
     st.subheader("Resolve schema mismatch")
 
@@ -186,17 +187,77 @@ def _render_fuzzy_mapping_flow() -> None:
             result = session.compare()
         except (DuckDiffError, ValueError, duckdb.Error) as exc:
             st.session_state.last_error = str(exc)
+            _close_pending_session()
         else:
             st.session_state.last_result_markdown = _format_result_markdown(result)
+            st.session_state.last_result = result
+            # Promote the pending session to result_session so export
+            # can use it -- it's already open with sources registered.
+            st.session_state.result_session = session
+            st.session_state.pending_session = None
+            st.session_state.pending_error = None
+            st.session_state.suggested_mapping = None
         finally:
-            # This branch is reached AFTER the error/suggestion panel
-            # above has already been rendered in this same script pass --
-            # clearing session_state here doesn't un-render that. Forcing
-            # a rerun discards this pass entirely and starts a clean one,
-            # where pending_session is None and only the final
-            # last_result_markdown/last_error (set above) gets shown.
-            _close_pending_session()
             st.rerun()
+
+
+def _render_mismatch_samples(result: ComparisonResult) -> None:
+    """Show a bounded preview of mismatched rows as a table."""
+    if not result.mismatch_samples:
+        return
+
+    st.subheader("Mismatch preview (up to 3 rows)")
+
+    # Build a flat list of dicts for st.table -- one row per MismatchSample,
+    # key columns first, then one column per differing field showing
+    # "a: X  /  b: Y" so the user can see both values side by side.
+    source_names = [s.name for s in result.sources]
+    rows = []
+    for sample in result.mismatch_samples:
+        row: dict[str, str] = {k: str(v) for k, v in sample.key.items()}
+        for col, values in sample.differences.items():
+            parts = [f"{src}: {values.get(src, 'N/A')}" for src in source_names]
+            row[col] = "  /  ".join(parts)
+        rows.append(row)
+
+    st.table(rows)
+
+
+def _render_export_section(result: ComparisonResult) -> None:
+    """Export path input + button, only shown when there's something to export."""
+    has_mismatches = result.mismatched_row_count > 0
+    has_only_in = any(count > 0 for count in result.only_in.values())
+    if not (has_mismatches or has_only_in):
+        return
+
+    st.subheader("Export detail")
+    export_path = st.text_input(
+        "Output path (base filename)",
+        value=_default_export_path(),
+        help=(
+            "duckdiff will write separate files derived from this name: "
+            "e.g. result_mismatches.csv, result_only_in_a.csv, etc."
+        ),
+        key="export_path_input",
+    )
+
+    if st.button("Export to files"):
+        session = st.session_state.result_session
+        if session is None:
+            st.error("No active session -- run Compare first.")
+            return
+        try:
+            session.export_mismatches(export_path)
+            base = Path(export_path)
+            stem, suffix = base.stem, base.suffix or ".csv"
+            written = [f"{stem}_mismatches{suffix}"] + [
+                f"{stem}_only_in_{s.name}{suffix}" for s in result.sources
+            ]
+            st.success(
+                f"Written to {base.parent}:\n" + "\n".join(f"- {f}" for f in written)
+            )
+        except (DuckDiffError, ValueError, duckdb.Error, OSError) as exc:
+            st.error(f"Export failed: {exc}")
 
 
 def main() -> None:
@@ -223,8 +284,13 @@ def main() -> None:
 
     if st.session_state.last_error:
         st.error(f"Error: {st.session_state.last_error}")
+
     if st.session_state.last_result_markdown:
         st.markdown(st.session_state.last_result_markdown)
+
+    if st.session_state.last_result is not None:
+        _render_mismatch_samples(st.session_state.last_result)
+        _render_export_section(st.session_state.last_result)
 
 
 main()
