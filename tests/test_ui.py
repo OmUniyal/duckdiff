@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from streamlit.testing.v1 import AppTest
 
 APP_PATH = "src/duckdiff/ui/app.py"
@@ -41,10 +43,6 @@ def test_remove_button_disabled_at_minimum_two_sources():
 
 
 def test_removing_middle_source_does_not_corrupt_remaining_rows():
-    """Regression test for the exact bug the UUID-keyed rows were built to
-    avoid: index-based widget keys would show stale/swapped values on the
-    rows after a removed one, since Streamlit's per-key state doesn't
-    shift when the underlying list does."""
     at = AppTest.from_file(APP_PATH)
     at.run()
 
@@ -104,14 +102,12 @@ def test_compare_shows_friendly_error_on_schema_mismatch(tmp_path):
 
     _find_button(at, "Compare").click().run()
 
-    assert not at.exception  # the app itself shouldn't crash
+    assert not at.exception
     assert len(at.error) == 1
     assert at.error[0].value.startswith("Error:")
 
 
 def test_compare_ignores_sources_with_blank_name_or_path(tmp_path):
-    """A third, never-filled-in row (e.g. from a stray '+ Add source'
-    click) shouldn't be passed to ComparisonSession at all."""
     a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
     b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
 
@@ -123,7 +119,7 @@ def test_compare_ignores_sources_with_blank_name_or_path(tmp_path):
     at.text_input(key=f"path_{a_id}").set_value(a).run()
     at.text_input(key=f"path_{b_id}").set_value(b).run()
 
-    _find_button(at, "+ Add source").click().run()  # leave the 3rd row blank
+    _find_button(at, "+ Add source").click().run()
     at.text_input(key="key_columns_input").set_value("id").run()
 
     _find_button(at, "Compare").click().run()
@@ -132,6 +128,171 @@ def test_compare_ignores_sources_with_blank_name_or_path(tmp_path):
     assert len(at.error) == 0
     markdown_text = "\n".join(m.value for m in at.markdown)
     assert "**Matched:** 1" in markdown_text
+
+
+# ---------------------------------------------------------------------------
+# Mismatch sample preview
+# ---------------------------------------------------------------------------
+
+
+def test_mismatch_samples_shown_after_compare_with_key_columns(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0", "2,20.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0", "2,99.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    result = at.session_state.last_result
+    assert result is not None
+    assert len(result.mismatch_samples) == 1
+    assert result.mismatch_samples[0].key == {"id": 2}
+    assert "amount" in result.mismatch_samples[0].differences
+
+
+def test_mismatch_samples_not_shown_when_no_key_columns(tmp_path):
+    """Full-row mode has no concept of mismatched rows, so no samples."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,99.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    # No key_columns_input set -- full-row mode
+
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    result = at.session_state.last_result
+    assert result is not None
+    assert result.mismatch_samples == []
+
+
+def test_result_session_kept_alive_after_compare(tmp_path):
+    """The session must survive past compare() so export can reuse it."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,99.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+
+    _find_button(at, "Compare").click().run()
+
+    assert at.session_state.result_session is not None
+
+
+def test_new_compare_closes_previous_result_session(tmp_path):
+    """A fresh Compare should tear down the old result_session cleanly."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,99.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+
+    _find_button(at, "Compare").click().run()
+    first_session = at.session_state.result_session
+
+    _find_button(at, "Compare").click().run()
+    second_session = at.session_state.result_session
+
+    assert first_session is not second_session
+
+
+# ---------------------------------------------------------------------------
+# Export flow
+# ---------------------------------------------------------------------------
+
+
+def test_export_default_path_derived_from_source_a(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,99.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+
+    _find_button(at, "Compare").click().run()
+
+    export_input = at.text_input(key="export_path_input")
+    expected_dir = str(Path(a).parent)
+    assert export_input.value.startswith(expected_dir)
+    assert export_input.value.endswith(".csv")
+
+
+def test_export_writes_files_to_disk(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0", "2,20.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0", "2,99.0"])
+    out = str(tmp_path / "result.csv")
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+
+    _find_button(at, "Compare").click().run()
+    at.text_input(key="export_path_input").set_value(out).run()
+    _find_button(at, "Export to files").click().run()
+
+    assert not at.exception
+    assert len(at.success) == 1
+    assert (tmp_path / "result_mismatches.csv").exists()
+    assert (tmp_path / "result_only_in_a.csv").exists()
+    assert (tmp_path / "result_only_in_b.csv").exists()
+
+
+def test_export_not_shown_when_everything_matches(tmp_path):
+    """No export section when matched=all, mismatched=0, only_in=0."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    # Export path input should not appear when there's nothing to export
+    export_keys = [ti.key for ti in at.text_input]
+    assert "export_path_input" not in export_keys
 
 
 # ---------------------------------------------------------------------------
@@ -164,11 +325,6 @@ def test_schema_mismatch_shows_error_and_suggest_button(tmp_path):
 
 
 def test_error_message_persists_after_clicking_suggest(tmp_path):
-    """Regression test for the exact bug the pending_error session_state
-    was built to avoid: a one-off st.error() call inside the Compare
-    handler would vanish on the NEXT rerun (clicking Suggest), since
-    Streamlit reruns the whole script and that handler doesn't execute
-    again on this click."""
     a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0"])
     b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0"])
 
@@ -181,7 +337,7 @@ def test_error_message_persists_after_clicking_suggest(tmp_path):
     _find_button(at, "Suggest column mapping").click().run()
 
     assert not at.exception
-    assert len(at.error) == 1  # still showing the ORIGINAL schema error
+    assert len(at.error) == 1
     assert at.error[0].value.startswith("Error:")
 
 
@@ -205,7 +361,6 @@ def test_suggest_then_apply_and_retry_succeeds(tmp_path):
     markdown_text = "\n".join(m.value for m in at.markdown)
     assert "**Matched:** 1" in markdown_text
     assert "**Mismatched:** 1" in markdown_text
-    # The retry flow should be fully torn down after a successful retry.
     assert at.session_state.pending_session is None
 
 
@@ -226,9 +381,6 @@ def test_no_suggestions_available_shows_info_message(tmp_path):
 
 
 def test_new_compare_click_abandons_unfinished_retry_flow(tmp_path):
-    """Clicking Compare again (e.g. after fixing a path) while a fuzzy-
-    mapping flow is still pending should cleanly close the old session,
-    not leak it or crash."""
     a = _write_csv(tmp_path, "a.csv", ["customer_id,amount", "1,10.0"])
     b = _write_csv(tmp_path, "b.csv", ["cust_id,amount", "1,10.0"])
     a2 = _write_csv(tmp_path, "a2.csv", ["id,amount", "1,10.0"])
