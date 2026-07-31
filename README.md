@@ -24,14 +24,17 @@ Most diff tools compare exactly two files and assume they fit in memory.
 - **`key_columns` given** — rows are aligned across sources by key, then
   the remaining columns are diffed per aligned row. This is what lets a
   result distinguish "row X differs in column Y" from "row X is only in
-  source A", and is required for tolerance-based (approximate) matching.
+  source A", and is required for tolerance-based (approximate) matching
+  and mismatch detail.
 
 ## Design principles
 
 - **Minimal by default.** Every optional behavior (fuzzy column mapping,
-  numeric tolerances, sanity-check mode) is off until you turn it on.
+  numeric tolerances, sanity-check mode, mismatch samples) is off until
+  you turn it on.
 - **One engine, thin surfaces.** `ComparisonSession` is where all the logic
-  lives. The CLI is a thin wrapper around it, and any future UI will be too.
+  lives. The CLI and UI are thin wrappers around it — every surface
+  behaves identically.
 - **Exact schema match required, unless a mapping is applied.** Comparison
   columns must match exactly by name across sources once `ignore_columns`
   and any accepted column mapping are applied — `SchemaMismatchError`
@@ -41,6 +44,12 @@ Most diff tools compare exactly two files and assume they fit in memory.
 
 ```bash
 pip install -e ".[dev]"
+```
+
+For the web UI:
+
+```bash
+pip install -e ".[ui]"
 ```
 
 ## Quickstart
@@ -87,22 +96,67 @@ with ComparisonSession(config) as session:
     result = session.compare(key_columns=["customer_id"])
 ```
 
+Mismatch detail — bounded preview in the result, full export to disk:
+
+```python
+from duckdiff import ComparisonSession, ComparisonConfig
+
+config = ComparisonConfig(
+    key_columns=["record_id"],
+    include_mismatch_samples=True,   # up to 3 rows in result.mismatch_samples
+    mismatch_sample_size=3,
+)
+with ComparisonSession(config) as session:
+    session.add_source("legacy", "legacy_export.csv")
+    session.add_source("new", "new_export.parquet")
+    result = session.compare()
+
+    for sample in result.mismatch_samples:
+        print(sample.key, sample.differences)
+
+    # Full export -- streams to disk, not memory-bounded
+    # Writes: result_mismatches.csv, result_only_in_legacy.csv,
+    #         result_only_in_new.csv
+    session.export_mismatches("result.csv")
+```
+
+## Mismatch export format
+
+`export_mismatches("result.csv")` derives filenames from the given base path
+and writes:
+
+- **`result_mismatches.csv`** — long/melted format, one row per (key,
+  differing column), with one value column per source:
+
+```
+record_id, column,  legacy_value, new_value
+42,        amount,  10.00,        10.03
+```
+
+- **`result_only_in_{source}.csv`** — one file per source, containing
+  the full original columns (not just comparison columns) for keys missing
+  from at least one other source. Empty files (headers only) are written
+  when there's nothing to report.
+
 ## Project layout
+
 ```
 src/duckdiff/
 ├── session.py      # ComparisonSession — the real engine, everything else wraps this
-├── config.py        # ComparisonConfig — minimal-by-default options
-├── comparator.py    # N-way DuckDB comparison logic (both modes implemented)
-├── schema.py         # Fuzzy column-mapping suggestions (implemented)
-├── results.py        # ComparisonResult / SourceSummary data structures
-├── exceptions.py       # DuckDiffError hierarchy
-└── cli.py               # Thin argparse-based CLI wrapper (full argument surface)
+├── config.py       # ComparisonConfig — minimal-by-default options
+├── comparator.py   # N-way DuckDB comparison logic (both modes, mismatch detail, export)
+├── schema.py       # Fuzzy column-mapping suggestions
+├── results.py      # ComparisonResult / SourceSummary / MismatchSample
+├── exceptions.py   # DuckDiffError hierarchy
+├── cli.py          # Thin CLI wrapper (compare/ui subcommands)
+└── ui/
+└── app.py      # Streamlit web UI
 ```
 
 ## CLI usage
 
 `duckdiff` has two subcommands: `compare` (run a comparison) and `ui`
-(launch the local web UI -- not yet implemented).
+(launch the local web UI).
 
 ```bash
 duckdiff compare legacy=legacy.csv new=new.csv --key customer_id \
@@ -124,36 +178,36 @@ duckdiff compare legacy=legacy.csv new=new.csv --key customer_id \
 Errors (schema mismatches, invalid config) print a single `Error: ...` line
 to stderr and exit 1 — not a Python traceback.
 
-
-## UI (in progress)
+## UI
 
 ```bash
-pip install -e ".[ui]"
 duckdiff ui
 ```
 
 Launches a local Streamlit app in your browser. Sources are referenced by
-**file path only, never uploaded** -- DuckDB reads straight off disk, same
+**file path only, never uploaded** — DuckDB reads straight off disk, same
 as the CLI, so large files never pass through the app as raw bytes.
 
-Currently implemented: a dynamic add/remove list of sources, key columns,
-case-insensitivity, and sanity-check mode, with a working Compare button.
-Not yet implemented: `--ignore`/tolerance rules, and the fuzzy-mapping
-flow -- both work from the CLI already, just not the UI yet.
-
+Features: dynamic add/remove source list, all comparison options (key
+columns, ignore columns, tolerances, case-insensitivity, sanity check),
+interactive fuzzy-mapping retry flow on schema mismatches, a 3-row mismatch
+preview after each comparison, and an export-to-files button with a
+pre-filled output path derived from the first source's location.
 
 ## Known limitations
 
 - **CLI errors from DuckDB are passed through verbatim.** `duckdiff`'s own
   errors (`SchemaMismatchError`, `ConfigurationError`) get clean messages,
   but DuckDB-native failures (bad file path, malformed CSV, etc.) print
-  DuckDB's raw exception text as-is -- including the generated SQL, e.g.
+  DuckDB's raw exception text as-is — including the generated SQL, e.g.
   `Error: IO Error: No files found that match the pattern "file1.csv"`.
   This is a deliberate simplicity tradeoff: one broad `except duckdb.Error`
   covers every DuckDB failure mode without a growing table of custom
-  translations. Safe to see (this is a local CLI over your own files, not
-  output shown to anyone else), just not as polished as it could be.
-
+  translations.
+- **Exact schema match required across sources.** Columns that exist in one
+  source but not another must be listed in `ignore_columns` or reconciled
+  via fuzzy column mapping before a comparison can run. Auto-intersecting
+  differing schemas is a planned future feature.
 
 ## Roadmap
 
@@ -162,10 +216,11 @@ flow -- both work from the CLI already, just not the UI yet.
 - [x] Fuzzy column-mapping suggestions
 - [x] CLI: full argument surface (ignore/tolerance/case/sanity-check), friendly errors
 - [x] CLI: interactive fuzzy-mapping flow (suggest -> confirm -> apply)
-- [x] UI: core plumbing -- dynamic source list, key columns, Compare, `duckdiff ui` launcher
-- [ ] UI: full parameter parity (ignore, tolerance, case-insensitive, sanity-check)
-- [ ] UI: interactive fuzzy-mapping flow
+- [x] CLI: split into `compare`/`ui` subcommands
+- [x] UI: full feature surface (sources, all options, fuzzy-mapping flow, mismatch preview, export)
+- [x] Mismatch detail: bounded sample in result + full streamed export to disk
 - [ ] `--dry-run` cost preview for large comparisons
+- [ ] Auto-intersect differing schemas (compare without needing to list extra columns in `ignore_columns`)
 
 ## License
 
