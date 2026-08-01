@@ -108,6 +108,7 @@ def _build_config() -> ComparisonConfig:
         tolerances=tolerances,
         case_sensitive=not st.session_state.get("case_insensitive", False),
         sanity_check_mode=st.session_state.get("sanity_check", False),
+        auto_intersect_columns=st.session_state.get("auto_intersect", False),
         enable_fuzzy_column_mapping=True,
         include_mismatch_samples=bool(key_columns),
         mismatch_sample_size=3,
@@ -324,6 +325,12 @@ def main() -> None:
     )
     st.checkbox("Case-insensitive", key="case_insensitive")
     st.checkbox("Sanity check", key="sanity_check")
+    st.checkbox(
+        "Auto-intersect columns",
+        key="auto_intersect",
+        help="Compare only columns shared by all sources. Columns unique to one "
+        "source are excluded with a warning instead of failing outright.",
+    )
 
     if st.button("Compare", type="primary"):
         _run_compare()

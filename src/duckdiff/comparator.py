@@ -92,22 +92,70 @@ def get_source_columns(
 def _comparison_columns(
     source_columns: dict[str, list[str]],
     ignore_columns: list[str],
-) -> list[str]:
+    auto_intersect: bool = False,
+    key_columns: list[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Determine the columns to compare and return (columns, warnings).
+
+    With auto_intersect=False (the default): requires an exact column-set
+    match across all sources after ignore_columns is applied, raising
+    SchemaMismatchError otherwise.
+
+    With auto_intersect=True: computes the intersection of all sources'
+    column sets and drops non-shared columns, surfacing a warning for
+    each source that had columns dropped. Raises ConfigurationError if
+    the intersection is empty (zero columns left to compare -- almost
+    certainly a mistake), or if only key columns remain in keyed mode.
+    """
     ignore = set(ignore_columns)
     column_sets = {name: set(cols) - ignore for name, cols in source_columns.items()}
-    reference_name, reference_set = next(iter(column_sets.items()))
+
+    if not auto_intersect:
+        reference_name, reference_set = next(iter(column_sets.items()))
+        for name, cols in column_sets.items():
+            if cols != reference_set:
+                missing = reference_set - cols
+                extra = cols - reference_set
+                raise SchemaMismatchError(
+                    f"Source '{name}' schema doesn't match source '{reference_name}' "
+                    f"after applying ignore_columns. Missing here: {sorted(missing)}. "
+                    f"Extra here: {sorted(extra)}. Use column mapping to reconcile "
+                    f"mismatched names, or add them to ignore_columns, or pass "
+                    f"auto_intersect_columns=True to compare only shared columns."
+                )
+        reference_cols = source_columns[reference_name]
+        return [c for c in reference_cols if c in reference_set], []
+
+    # Auto-intersect: keep only columns present in every source.
+    shared = set.intersection(*column_sets.values()) if column_sets else set()
+
+    if not shared:
+        raise ConfigurationError(
+            "No columns are shared across all sources after applying ignore_columns. "
+            "There is nothing to compare. Check that your sources have overlapping "
+            "column names, or review your ignore_columns setting."
+        )
+
+    key_column_set = set(key_columns or [])
+    if key_column_set and not (shared - key_column_set):
+        raise ConfigurationError(
+            "No columns are shared across all sources after applying ignore_columns. "
+            "There is nothing to compare once key_columns are excluded. "
+            "Check that your sources share at least one non-key comparison column."
+        )
+
+    warnings: list[str] = []
     for name, cols in column_sets.items():
-        if cols != reference_set:
-            missing = reference_set - cols
-            extra = cols - reference_set
-            raise SchemaMismatchError(
-                f"Source '{name}' schema doesn't match source '{reference_name}' "
-                f"after applying ignore_columns. Missing here: {sorted(missing)}. "
-                f"Extra here: {sorted(extra)}. Use column mapping to reconcile "
-                f"mismatched names, or add them to ignore_columns."
+        dropped = sorted(cols - shared)
+        if dropped:
+            warnings.append(
+                f"Source '{name}': columns {dropped} not present in all sources "
+                f"-- excluded from comparison (auto_intersect_columns=True)."
             )
-    reference_cols = source_columns[reference_name]
-    return [c for c in reference_cols if c in reference_set]
+
+    # Use the first source's column order for the intersection, for determinism.
+    first_cols = source_columns[next(iter(source_columns))]
+    return [c for c in first_cols if c in shared], warnings
 
 
 def _validate_config(config: ComparisonConfig, comparison_columns: list[str]) -> None:
@@ -425,7 +473,12 @@ def run_comparison(
             alias: _scalar_query(con, f"SELECT COUNT(*) FROM {_q(alias)}") for alias in aliases
         }
 
-        comparison_columns = _comparison_columns(source_columns, config.ignore_columns)
+        comparison_columns, intersect_warnings = _comparison_columns(
+            source_columns,
+            config.ignore_columns,
+            config.auto_intersect_columns,
+            config.key_columns,
+        )
         _validate_config(config, comparison_columns)
 
         source_summaries = [
@@ -437,6 +490,7 @@ def run_comparison(
             for alias in aliases
         ]
         result = ComparisonResult(sources=source_summaries)
+        result.warnings.extend(intersect_warnings)
 
         if config.key_columns:
             matched, mismatched, only_in, samples = _mode_keyed(
@@ -496,7 +550,12 @@ def export_mismatches(
     try:
         aliases = list(sources.keys())
         source_columns = get_source_columns(con, sources, column_mapping)
-        comparison_columns = _comparison_columns(source_columns, config.ignore_columns)
+        comparison_columns, _ = _comparison_columns(
+            source_columns,
+            config.ignore_columns,
+            config.auto_intersect_columns,
+            config.key_columns,
+        )
         _validate_config(config, comparison_columns)
 
         value_columns, column_equal_sql, present_flags = _build_keyed_join(

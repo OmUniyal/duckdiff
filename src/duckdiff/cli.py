@@ -91,6 +91,13 @@ def _add_compare_arguments(parser: argparse.ArgumentParser) -> None:
         help="Surface cheap pre-flight warnings (row count disparity, etc).",
     )
     parser.add_argument(
+        "--auto-intersect",
+        action="store_true",
+        dest="auto_intersect",
+        help="Instead of failing on schema mismatches, compare only the columns "
+        "present in all sources. Dropped columns are reported as warnings.",
+    )
+    parser.add_argument(
         "--fuzzy-map",
         action="store_true",
         dest="fuzzy_map",
@@ -153,6 +160,7 @@ def _build_config(args: argparse.Namespace) -> ComparisonConfig:
         tolerances=_build_tolerance_rules(args.tolerance_abs, args.tolerance_rel),
         case_sensitive=not args.case_insensitive,
         sanity_check_mode=args.sanity_check,
+        auto_intersect_columns=args.auto_intersect,
         enable_fuzzy_column_mapping=args.fuzzy_map,
     )
 
