@@ -157,6 +157,29 @@ def test_non_numeric_tolerance_value_exits_with_usage_error():
     assert exc_info.value.code == 2
 
 
+def test_auto_intersect_flag_parses():
+    parser = build_parser()
+    args = parser.parse_args(["compare", "a=a.csv", "b=b.csv", "--auto-intersect"])
+    assert args.auto_intersect is True
+
+
+def test_auto_intersect_defaults_to_false():
+    parser = build_parser()
+    args = parser.parse_args(["compare", "a=a.csv", "b=b.csv"])
+    assert args.auto_intersect is False
+
+
+def test_main_auto_intersect_compares_shared_columns(tmp_path, capsys):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,notes", "1,10.0,x"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+    exit_code = main(
+        ["compare", f"a={a}", f"b={b}", "--key", "id", "--auto-intersect"]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Matched:     1" in out
+
+
 # ---------------------------------------------------------------------------
 # _key_value_float
 # ---------------------------------------------------------------------------

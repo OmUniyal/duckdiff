@@ -43,6 +43,14 @@ class ComparisonConfig:
 
     sanity_check_mode: bool = False
 
+    # Auto-intersect columns across sources instead of requiring an exact
+    # match. When True, columns that don't exist in every source are
+    # silently dropped from the comparison (with a warning listing what
+    # was dropped). When False (the default), a column-set mismatch raises
+    # SchemaMismatchError immediately -- safer for catching accidental
+    # schema drift.
+    auto_intersect_columns: bool = False
+
     # Bounded, in-memory preview of mismatched rows (see
     # results.MismatchSample), returned as part of ComparisonResult.
     # Requires key_columns for the same reason tolerances do -- "which

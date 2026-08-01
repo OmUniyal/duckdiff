@@ -500,3 +500,27 @@ def test_malformed_tolerance_input_silently_skipped(tmp_path):
 
     assert not at.exception
     assert len(at.error) == 0
+
+
+def test_auto_intersect_checkbox_allows_mismatched_schemas(tmp_path):
+    """Without auto-intersect this would raise SchemaMismatchError.
+    With the checkbox on, comparison proceeds on shared columns."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,notes", "1,10.0,x"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    sources = at.session_state.sources
+    a_id, b_id = sources[0]["id"], sources[1]["id"]
+    at.text_input(key=f"path_{a_id}").set_value(a).run()
+    at.text_input(key=f"path_{b_id}").set_value(b).run()
+    at.text_input(key="key_columns_input").set_value("id").run()
+    at.checkbox(key="auto_intersect").set_value(True).run()
+
+    _find_button(at, "Compare").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 0
+    markdown_text = "\n".join(m.value for m in at.markdown)
+    assert "**Matched:** 1" in markdown_text

@@ -445,3 +445,68 @@ def test_export_three_way_creates_one_only_in_file_per_source(tmp_path):
     assert len(_read_csv_rows(tmp_path / "result_only_in_a.csv")) == 1
     assert len(_read_csv_rows(tmp_path / "result_only_in_b.csv")) == 1
     assert len(_read_csv_rows(tmp_path / "result_only_in_c.csv")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Auto-intersect columns
+# ---------------------------------------------------------------------------
+
+
+def test_auto_intersect_off_by_default_still_raises_on_mismatch(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,total", "1,10.0"])
+    with pytest.raises(SchemaMismatchError):
+        run_comparison({"a": a, "b": b}, ComparisonConfig())
+
+
+def test_auto_intersect_compares_shared_columns_only(tmp_path):
+    """a has 'notes', b doesn't -- with auto_intersect, comparison proceeds
+    on the shared columns (id, amount) and 'notes' is dropped with a warning."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,notes", "1,10.0,x", "2,20.0,y"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0", "2,25.0"])
+    config = ComparisonConfig(key_columns=["id"], auto_intersect_columns=True)
+    result = run_comparison({"a": a, "b": b}, config)
+
+    assert result.matched_row_count == 1
+    assert result.mismatched_row_count == 1
+    assert any("notes" in w for w in result.warnings)
+
+
+def test_auto_intersect_warning_names_the_source_and_dropped_columns(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,region", "1,10.0,us"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+    config = ComparisonConfig(key_columns=["id"], auto_intersect_columns=True)
+    result = run_comparison({"a": a, "b": b}, config)
+
+    assert len(result.warnings) == 1
+    assert "region" in result.warnings[0]
+    assert "a" in result.warnings[0]
+
+
+def test_auto_intersect_no_warning_when_schemas_already_match(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount", "1,10.0"])
+    config = ComparisonConfig(key_columns=["id"], auto_intersect_columns=True)
+    result = run_comparison({"a": a, "b": b}, config)
+    assert result.warnings == []
+
+
+def test_auto_intersect_raises_when_no_shared_columns(tmp_path):
+    a = _write_csv(tmp_path, "a.csv", ["id,amount", "1,10.0"])
+    b = _write_csv(tmp_path, "b.csv", ["id,region", "1,us"])
+    config = ComparisonConfig(key_columns=["id"], auto_intersect_columns=True)
+    with pytest.raises(ConfigurationError, match="No columns are shared"):
+        run_comparison({"a": a, "b": b}, config)
+
+
+def test_auto_intersect_three_way(tmp_path):
+    """Only 'amount' is shared across all three -- 'notes' (only in a)
+    and 'region' (only in b) both get dropped."""
+    a = _write_csv(tmp_path, "a.csv", ["id,amount,notes", "1,10.0,x"])
+    b = _write_csv(tmp_path, "b.csv", ["id,amount,region", "1,10.0,us"])
+    c = _write_csv(tmp_path, "c.csv", ["id,amount", "1,10.0"])
+    config = ComparisonConfig(key_columns=["id"], auto_intersect_columns=True)
+    result = run_comparison({"a": a, "b": b, "c": c}, config)
+
+    assert result.matched_row_count == 1
+    assert len(result.warnings) == 2
