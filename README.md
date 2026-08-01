@@ -204,10 +204,11 @@ pre-filled output path derived from the first source's location.
   This is a deliberate simplicity tradeoff: one broad `except duckdb.Error`
   covers every DuckDB failure mode without a growing table of custom
   translations.
-- **Exact schema match required across sources.** Columns that exist in one
+- **Exact schema match required by default.** Columns that exist in one
   source but not another must be listed in `ignore_columns` or reconciled
-  via fuzzy column mapping before a comparison can run. Auto-intersecting
-  differing schemas is a planned future feature.
+  via fuzzy column mapping before a comparison can run — unless
+  `auto_intersect_columns=True` is set, which drops non-shared columns
+  automatically and surfaces them as warnings instead.
 
 ## Roadmap
 
@@ -220,7 +221,7 @@ pre-filled output path derived from the first source's location.
 - [x] UI: full feature surface (sources, all options, fuzzy-mapping flow, mismatch preview, export)
 - [x] Mismatch detail: bounded sample in result + full streamed export to disk
 - [ ] `--dry-run` cost preview for large comparisons
-- [ ] Auto-intersect differing schemas (compare without needing to list extra columns in `ignore_columns`)
+- [x] Auto-intersect differing schemas (`auto_intersect_columns=True` compares only shared columns, warns about dropped ones)
 
 ## License
 
