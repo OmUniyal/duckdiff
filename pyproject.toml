@@ -45,6 +45,7 @@ duckdiff = "duckdiff.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/OmUniyal/duckdiff"
+Repository = "https://github.com/OmUniyal/duckdiff"
 Issues = "https://github.com/OmUniyal/duckdiff/issues"
 
 [tool.hatch.build.targets.wheel]
