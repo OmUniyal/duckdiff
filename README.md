@@ -174,6 +174,11 @@ duckdiff compare legacy=legacy.csv new=new.csv --key customer_id \
 - `--fuzzy-map` — on a schema mismatch, suggest a column mapping and offer
   to apply it (with a y/N confirmation) instead of failing outright.
   `--yes`/`-y` skips the confirmation.
+- `--dry-run` — preview schema compatibility and file sizes without scanning
+  any rows. Shows each source's file size and column list, the resolved
+  comparison columns (or the schema error that `compare` would raise), and
+  any auto-intersect warnings. Useful before running a large comparison to
+  confirm the config is correct.
 
 Errors (schema mismatches, invalid config) print a single `Error: ...` line
 to stderr and exit 1 — not a Python traceback.
@@ -220,7 +225,7 @@ pre-filled output path derived from the first source's location.
 - [x] CLI: split into `compare`/`ui` subcommands
 - [x] UI: full feature surface (sources, all options, fuzzy-mapping flow, mismatch preview, export)
 - [x] Mismatch detail: bounded sample in result + full streamed export to disk
-- [ ] `--dry-run` cost preview for large comparisons
+- [x] `--dry-run` cost preview for large comparisons
 - [x] Auto-intersect differing schemas (`auto_intersect_columns=True` compares only shared columns, warns about dropped ones)
 
 ## License
