@@ -43,13 +43,13 @@ Most diff tools compare exactly two files and assume they fit in memory.
 ## Install
 
 ```bash
-pip install -e ".[dev]"
+pip install duckdiff
 ```
 
 For the web UI:
 
 ```bash
-pip install -e ".[ui]"
+pip install "duckdiff[ui]"
 ```
 
 ## Quickstart
