@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import TYPE_CHECKING
 
 from duckdiff.config import ComparisonConfig, ToleranceRule
@@ -591,6 +592,70 @@ def export_mismatches(
                 _copy_to_csv(con, export_sql, only_in_path)
         finally:
             con.execute("DROP TABLE __keyed_join__")
+    finally:
+        if owns_connection:
+            con.close()
+
+
+def dry_run(
+    sources: dict[str, str],
+    config: ComparisonConfig,
+    connection: duckdb.DuckDBPyConnection | None = None,
+    column_mapping: dict[str, dict[str, str]] | None = None,
+) -> "DryRunResult":
+    """Cheap pre-flight preview: schema introspection + file sizes only.
+
+    Registers each source as a DuckDB view (needed to read column names)
+    but never scans row data -- no COUNT(*), no joins, no melt queries.
+    File sizes come from the OS. Schema compatibility is resolved via the
+    same _comparison_columns() path that run_comparison() uses, so the
+    dry-run verdict is always consistent with what compare() would do.
+
+    Always returns a DryRunResult -- never raises SchemaMismatchError or
+    ConfigurationError. Those are captured in result.would_raise instead,
+    so the caller can inspect what would fail before committing to a run.
+    """
+    from duckdiff.results import DryRunResult, SourcePreview
+
+    import duckdb as duckdb_module
+
+    owns_connection = connection is None
+    con = connection or duckdb_module.connect(database=":memory:")
+    try:
+        aliases = list(sources.keys())
+        source_columns = get_source_columns(con, sources, column_mapping)
+
+        previews = [
+            SourcePreview(
+                name=alias,
+                path=sources[alias],
+                file_size_bytes=os.path.getsize(sources[alias]),
+                columns=source_columns[alias],
+            )
+            for alias in aliases
+        ]
+
+        comparison_columns: list[str] = []
+        warnings: list[str] = []
+        would_raise: str | None = None
+
+        try:
+            comparison_columns, intersect_warnings = _comparison_columns(
+                source_columns,
+                config.ignore_columns,
+                config.auto_intersect_columns,
+                config.key_columns,
+            )
+            warnings.extend(intersect_warnings)
+        except (SchemaMismatchError, ConfigurationError) as exc:
+            would_raise = str(exc)
+
+        return DryRunResult(
+            sources=previews,
+            comparison_columns=comparison_columns,
+            warnings=warnings,
+            would_raise=would_raise,
+        )
     finally:
         if owns_connection:
             con.close()

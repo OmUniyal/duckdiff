@@ -11,11 +11,12 @@ from typing import Any
 
 import duckdb
 
+from duckdiff.comparator import dry_run as _dry_run
 from duckdiff.comparator import export_mismatches as _export_mismatches
 from duckdiff.comparator import get_source_columns, run_comparison
 from duckdiff.config import ComparisonConfig
 from duckdiff.exceptions import ConfigurationError
-from duckdiff.results import ComparisonResult
+from duckdiff.results import ComparisonResult, DryRunResult
 from duckdiff.schema import suggest_column_mapping as _suggest_column_mapping
 
 
@@ -86,6 +87,22 @@ class ComparisonSession:
         if key_columns:
             self.config.key_columns = key_columns
         return run_comparison(
+            self._sources,
+            self.config,
+            connection=self._connection,
+            column_mapping=self._column_mapping or None,
+        )
+
+    def dry_run(self) -> DryRunResult:
+        """Cheap pre-flight preview: schema introspection + file sizes only.
+
+        No row data is scanned. Returns a DryRunResult describing what
+        compare() would do -- including any schema error that would be
+        raised -- without actually running the comparison.
+        """
+        if len(self._sources) < 2:
+            raise ValueError("Need at least 2 sources to dry-run.")
+        return _dry_run(
             self._sources,
             self.config,
             connection=self._connection,

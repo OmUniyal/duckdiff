@@ -22,7 +22,7 @@ import duckdb
 
 from duckdiff.config import ComparisonConfig, ToleranceRule
 from duckdiff.exceptions import DuckDiffError, SchemaMismatchError
-from duckdiff.results import ComparisonResult
+from duckdiff.results import ComparisonResult, DryRunResult
 from duckdiff.session import ComparisonSession
 
 
@@ -111,6 +111,12 @@ def _add_compare_arguments(parser: argparse.ArgumentParser) -> None:
         help="Skip the confirmation prompt and auto-accept a suggested "
         "mapping. Only relevant with --fuzzy-map.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Preview schema compatibility and file sizes without running the full comparison.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,6 +169,33 @@ def _build_config(args: argparse.Namespace) -> ComparisonConfig:
         auto_intersect_columns=args.auto_intersect,
         enable_fuzzy_column_mapping=args.fuzzy_map,
     )
+
+
+def _format_dry_run_result(result: DryRunResult) -> str:
+    lines = ["Dry-run preview (no rows scanned):"]
+    lines.append("")
+    lines.append("Sources:")
+    for source in result.sources:
+        size_kb = source.file_size_bytes / 1024
+        col_count = len(source.columns)
+        lines.append(f"  {source.name}: {size_kb:,.1f} KB, {col_count} columns")
+        lines.append(f"    columns: {', '.join(source.columns)}")
+
+    if result.would_raise:
+        lines.append("")
+        lines.append(f"Schema error (compare would fail): {result.would_raise}")
+    else:
+        lines.append("")
+        lines.append(f"Comparison columns ({len(result.comparison_columns)}): "
+                     f"{', '.join(result.comparison_columns)}")
+
+    if result.warnings:
+        lines.append("")
+        lines.append("Warnings:")
+        for warning in result.warnings:
+            lines.append(f"  - {warning}")
+
+    return "\n".join(lines)
 
 
 def _format_result(result: ComparisonResult) -> str:
@@ -244,6 +277,10 @@ def _run_compare(
             parser.error(f"Source '{pair}' must be in name=path format.")
         name, path = pair.split("=", 1)
         session.add_source(name, path)
+    
+    if args.dry_run:
+        print(_format_dry_run_result(session.dry_run()))
+        return 0
 
     try:
         result = session.compare()

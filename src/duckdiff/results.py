@@ -42,3 +42,33 @@ class ComparisonResult:
     column_mapping: dict[str, dict[str, str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     mismatch_samples: list[MismatchSample] = field(default_factory=list)
+
+@dataclass
+class SourcePreview:
+    """Metadata for a single source in a dry-run preview.
+
+    No row data is read -- file_size_bytes comes from the OS and
+    columns comes from DuckDB's schema introspection (DESCRIBE).
+    """
+
+    name: str
+    path: str
+    file_size_bytes: int
+    columns: list[str]
+
+@dataclass
+class DryRunResult:
+    """The outcome of a dry_run() call.
+
+    Always returned (never raises), so the caller can inspect what
+    *would* happen before committing to a full comparison run.
+
+    If the sources are schema-incompatible and auto_intersect_columns
+    is False, `would_raise` holds the error message that compare()
+    would have raised -- comparison_columns will be empty in that case.
+    """
+
+    sources: list[SourcePreview] = field(default_factory=list)
+    comparison_columns: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    would_raise: str | None = None
