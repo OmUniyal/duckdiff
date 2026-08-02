@@ -6,7 +6,7 @@ so the CLI can never drift from what the library does.
 
 Subcommands:
   duckdiff compare ...   -- run a comparison from the command line
-  duckdiff ui             -- launch the local web UI (not yet implemented)
+  duckdiff ui             -- launch the local web UI in your browser
 """
 
 from __future__ import annotations
