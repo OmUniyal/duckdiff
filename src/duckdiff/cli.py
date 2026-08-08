@@ -7,6 +7,7 @@ so the CLI can never drift from what the library does.
 Subcommands:
   duckdiff compare ...   -- run a comparison from the command line
   duckdiff ui             -- launch the local web UI in your browser
+  duckdiff keys ...       -- suggest key columns for a single source file
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import duckdb
 
 from duckdiff.config import ComparisonConfig, ToleranceRule
 from duckdiff.exceptions import DuckDiffError, SchemaMismatchError
-from duckdiff.results import ComparisonResult, DryRunResult
+from duckdiff.results import ComparisonResult, DryRunResult, KeyColumnSuggestion
 from duckdiff.session import ComparisonSession
 
 
@@ -139,6 +140,16 @@ def build_parser() -> argparse.ArgumentParser:
         description="Launch duckdiff's local web UI in a browser.",
     )
 
+    keys_parser = subparsers.add_parser(
+        "keys",
+        help="Suggest key columns for a single source file.",
+        description="Discover which column(s) uniquely identify rows in a file.",
+    )
+    keys_parser.add_argument(
+        "source",
+        help="Source file to inspect, as a name=path pair (e.g. a=data.csv).",
+    )
+
     return parser
 
 
@@ -169,6 +180,47 @@ def _build_config(args: argparse.Namespace) -> ComparisonConfig:
         auto_intersect_columns=args.auto_intersect,
         enable_fuzzy_column_mapping=args.fuzzy_map,
     )
+
+
+def _format_key_suggestions(
+    suggestions: list[KeyColumnSuggestion],
+    source_name: str,
+) -> str:
+    lines = [f"Key column suggestions for '{source_name}':"]
+    if not suggestions:
+        lines.append("  No candidate keys found.")
+        return "\n".join(lines)
+
+    unique = [s for s in suggestions if s.is_unique]
+    non_unique = [s for s in suggestions if not s.is_unique]
+
+    if unique:
+        lines.append("")
+        lines.append("  Unique keys (safe to use with --key):")
+        for s in unique:
+            label = " + ".join(s.columns)
+            lines.append(f"    ✓  {label}")
+    else:
+        lines.append("")
+        lines.append("  No unique key found. Closest candidates:")
+
+    if non_unique:
+        lines.append("")
+        lines.append("  Non-unique candidates:")
+        for s in non_unique:
+            label = " + ".join(s.columns)
+            pct = s.distinct_count / s.total_count * 100
+            lines.append(
+                f"    -  {label:<40} "
+                f"{s.distinct_count:,} distinct / {s.total_count:,} rows ({pct:.1f}%)"
+            )
+
+    if unique:
+        lines.append("")
+        flags = " ".join(f'--key "{c}"' for c in unique[0].columns)
+        lines.append(f"  Suggested: duckdiff compare ... {flags}")
+
+    return "\n".join(lines)
 
 
 def _format_dry_run_result(result: DryRunResult) -> str:
@@ -297,6 +349,25 @@ def _run_compare(
     return 0
 
 
+def _run_keys(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> int:
+    pair = args.source
+    if "=" not in pair:
+        parser.error(f"Source '{pair}' must be in name=path format.")
+    name, path = pair.split("=", 1)
+    session = ComparisonSession()
+    session.add_source(name, path)
+    try:
+        suggestions = session.suggest_key_columns(name)
+    except (DuckDiffError, ValueError, duckdb.Error) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(_format_key_suggestions(suggestions, name))
+    return 0
+
+
 def _run_ui(
     args: argparse.Namespace,
     runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
@@ -341,6 +412,8 @@ def main(
         return _run_compare(parser, args, input_func)
     if args.command == "ui":
         return _run_ui(args, ui_runner)
+    if args.command == "keys":
+        return _run_keys(parser, args)
 
     parser.error(f"unknown command '{args.command}'")  # unreachable: required=True guards this
     raise AssertionError("unreachable")  # appease mypy's return-type check
