@@ -9,7 +9,7 @@ from duckdiff.exceptions import ConfigurationError, DuckDiffError, SchemaMismatc
 from duckdiff.results import ComparisonResult, DryRunResult, MismatchSample, SourcePreview, SourceSummary, KeyColumnSuggestion
 from duckdiff.session import ComparisonSession
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "ComparisonSession",

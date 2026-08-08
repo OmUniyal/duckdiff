@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "duckdiff"
-version = "0.1.0"
+version = "0.1.1"
 description = "N-way, order-independent comparison of large record files, powered by DuckDB."
 readme = "README.md"
 requires-python = ">=3.10"
