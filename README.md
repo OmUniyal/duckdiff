@@ -146,7 +146,7 @@ src/duckdiff/
 ├── config.py       # ComparisonConfig — minimal-by-default options
 ├── comparator.py   # N-way DuckDB comparison logic (both modes, mismatch detail, export)
 ├── schema.py       # Fuzzy column-mapping suggestions
-├── results.py      # ComparisonResult / SourceSummary / MismatchSample
+├── results.py      # ComparisonResult / SourceSummary / MismatchSample / KeyColumnSuggestion
 ├── exceptions.py   # DuckDiffError hierarchy
 ├── cli.py          # Thin CLI wrapper (compare/ui subcommands)
 └── ui/
@@ -155,8 +155,8 @@ src/duckdiff/
 
 ## CLI usage
 
-`duckdiff` has two subcommands: `compare` (run a comparison) and `ui`
-(launch the local web UI).
+`duckdiff` has three subcommands: `compare` (run a comparison), `keys`
+(discover key columns), and `ui` (launch the local web UI).
 
 ```bash
 duckdiff compare legacy=legacy.csv new=new.csv --key customer_id \
@@ -182,6 +182,18 @@ duckdiff compare legacy=legacy.csv new=new.csv --key customer_id \
 
 Errors (schema mismatches, invalid config) print a single `Error: ...` line
 to stderr and exit 1 — not a Python traceback.
+
+### Discovering key columns
+
+```bash
+duckdiff keys a=data.csv
+```
+
+Scans a single file and suggests which column(s) uniquely identify each
+row -- useful when you're not sure which `--key` to pass to `compare`.
+Measure-like columns (revenue, quantity, amount, etc.) are excluded
+automatically. Prints unique keys first, with suggested `--key` flags
+ready to copy into your `compare` command.
 
 ## UI
 
@@ -226,6 +238,7 @@ pre-filled output path derived from the first source's location.
 - [x] UI: full feature surface (sources, all options, fuzzy-mapping flow, mismatch preview, export)
 - [x] Mismatch detail: bounded sample in result + full streamed export to disk
 - [x] `--dry-run` cost preview for large comparisons
+- [x] Key column discovery (`duckdiff keys` suggests unique key columns for a source file)
 - [x] Auto-intersect differing schemas (`auto_intersect_columns=True` compares only shared columns, warns about dropped ones)
 
 ## License
