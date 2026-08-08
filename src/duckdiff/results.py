@@ -72,3 +72,18 @@ class DryRunResult:
     comparison_columns: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     would_raise: str | None = None
+
+@dataclass
+class KeyColumnSuggestion:
+    """A candidate key combination found by suggest_key_columns().
+
+    Returned as part of a ranked list -- unique keys (is_unique=True)
+    bubble to the top. Non-unique candidates are included so the caller
+    can see how close a combination gets to uniqueness even if no perfect
+    key is found.
+    """
+
+    columns: list[str]
+    distinct_count: int
+    total_count: int
+    is_unique: bool

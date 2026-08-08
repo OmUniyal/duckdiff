@@ -14,9 +14,10 @@ import duckdb
 from duckdiff.comparator import dry_run as _dry_run
 from duckdiff.comparator import export_mismatches as _export_mismatches
 from duckdiff.comparator import get_source_columns, run_comparison
+from duckdiff.comparator import suggest_key_columns as _suggest_key_columns
 from duckdiff.config import ComparisonConfig
 from duckdiff.exceptions import ConfigurationError
-from duckdiff.results import ComparisonResult, DryRunResult
+from duckdiff.results import ComparisonResult, DryRunResult, KeyColumnSuggestion
 from duckdiff.schema import suggest_column_mapping as _suggest_column_mapping
 
 
@@ -107,6 +108,27 @@ class ComparisonSession:
             self.config,
             connection=self._connection,
             column_mapping=self._column_mapping or None,
+        )
+
+    def suggest_key_columns(self, source_name: str) -> list[KeyColumnSuggestion]:
+        """Suggest which column(s) uniquely identify rows in a single registered source.
+
+        Tests single columns first, then composites in increasing size, stopping
+        at the first size that yields a unique key. Measure-like columns
+        (revenue, quantity, etc.) are excluded from candidacy automatically.
+
+        Returns a ranked list of KeyColumnSuggestion -- unique keys first.
+        Non-unique candidates are included so you can see how close each
+        combination gets if no perfect key is found.
+        """
+        if source_name not in self._sources:
+            raise ValueError(
+                f"Source '{source_name}' is not registered. "
+                f"Available: {sorted(self._sources)}"
+            )
+        return _suggest_key_columns(
+            self._sources[source_name],
+            connection=self._connection,
         )
 
     def export_mismatches(self, output_path: str) -> None:

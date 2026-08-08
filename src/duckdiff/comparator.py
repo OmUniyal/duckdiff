@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from duckdiff.config import ComparisonConfig, ToleranceRule
 from duckdiff.exceptions import ConfigurationError, SchemaMismatchError
-from duckdiff.results import ComparisonResult, MismatchSample, SourceSummary
+from duckdiff.results import ComparisonResult, MismatchSample, SourceSummary, KeyColumnSuggestion
 
 if TYPE_CHECKING:
     import duckdb
@@ -656,6 +656,81 @@ def dry_run(
             warnings=warnings,
             would_raise=would_raise,
         )
+    finally:
+        if owns_connection:
+            con.close()
+
+
+# Heuristic patterns that suggest a column is a measure, not a dimension.
+# Candidate key testing skips these -- measures are unlikely to be key columns.
+_MEASURE_HINTS = frozenset([
+    "revenue", "quantity", "amount", "qty", "count", "total",
+    "sales", "price", "cost", "invoice", "member", "value", "#",
+])
+
+
+def _looks_like_measure(col: str) -> bool:
+    lower = col.lower()
+    return any(hint in lower for hint in _MEASURE_HINTS)
+
+
+def suggest_key_columns(
+    source: str,
+    connection: duckdb.DuckDBPyConnection | None = None,
+    max_combo_size: int = 6,
+) -> list[KeyColumnSuggestion]:
+    """Suggest which column(s) uniquely identify rows in a single source file.
+
+    Tests single columns first, then composites in increasing size. Stops
+    at the first size that produces at least one unique key -- no point
+    testing larger combos if a smaller one already works.
+
+    Columns whose names suggest they are measures (revenue, quantity, etc.)
+    are excluded from candidate testing -- they are unlikely to be key
+    columns and including them would produce misleading suggestions.
+
+    Returns a list of KeyColumnSuggestion, sorted by distinct_count
+    descending (unique keys first). Non-unique candidates are included
+    so the caller can see how close each combination gets.
+    """
+    import duckdb as duckdb_module
+    import itertools
+
+    owns_connection = connection is None
+    con = connection or duckdb_module.connect(database=":memory:")
+    try:
+        alias = "__suggest_key_source__"
+        all_columns = _register_source(con, alias, source)
+        total = _scalar_query(con, f"SELECT COUNT(*) FROM {_q(alias)}")
+
+        dimensions = [c for c in all_columns if not _looks_like_measure(c)]
+
+        results: list[KeyColumnSuggestion] = []
+        found_unique = False
+
+        for size in range(1, min(max_combo_size + 1, len(dimensions) + 1)):
+            if found_unique:
+                break
+            size_results: list[KeyColumnSuggestion] = []
+            for combo in itertools.combinations(dimensions, size):
+                cols = list(combo)
+                col_sql = ", ".join(f"{_q(c)}" for c in cols)
+                distinct = _scalar_query(
+                    con,
+                    f"SELECT COUNT(DISTINCT ({col_sql})) FROM {_q(alias)}",
+                )
+                is_unique = distinct == total
+                if is_unique:
+                    found_unique = True
+                size_results.append(KeyColumnSuggestion(
+                    columns=cols,
+                    distinct_count=distinct,
+                    total_count=total,
+                    is_unique=is_unique,
+                ))
+            results.extend(size_results)
+
+        return sorted(results, key=lambda s: s.distinct_count, reverse=True)
     finally:
         if owns_connection:
             con.close()
