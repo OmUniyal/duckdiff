@@ -104,7 +104,7 @@ def test_composite_key_found_when_no_single_column_unique(tmp_path):
     f = tmp_path / "a.csv"
     # Neither store_code nor month is unique alone; together they are
     f.write_text("store_code,month,sales\n"
-                 "A,Jan,100\nA,Feb,200\nB,Jan,150\nB,Feb,250\n")
+                 "A,Jan,100.0\nA,Feb,200.0\nB,Jan,150.0\nB,Feb,250.0\n")
     session = _session_with(str(f))
     result = session.suggest_key_columns("a")
     unique = [s for s in result if s.is_unique]
@@ -127,7 +127,7 @@ def test_stops_at_first_unique_size(tmp_path):
 
 def test_measure_columns_excluded(tmp_path):
     f = tmp_path / "a.csv"
-    f.write_text("id,revenue,quantity\n1,100,5\n2,200,10\n")
+    f.write_text("id,revenue,quantity\n1,100.0,5.0\n2,200.0,10.0\n")
     session = _session_with(str(f))
     result = session.suggest_key_columns("a")
     all_tested_cols = {col for s in result for col in s.columns}

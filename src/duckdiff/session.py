@@ -114,8 +114,8 @@ class ComparisonSession:
         """Suggest which column(s) uniquely identify rows in a single registered source.
 
         Tests single columns first, then composites in increasing size, stopping
-        at the first size that yields a unique key. Measure-like columns
-        (revenue, quantity, etc.) are excluded from candidacy automatically.
+        at the first size that yields a unique key. Columns with float/decimal
+        types (DOUBLE, FLOAT, DECIMAL, REAL) are excluded as likely measures.
 
         Returns a ranked list of KeyColumnSuggestion -- unique keys first.
         Non-unique candidates are included so you can see how close each
@@ -126,9 +126,13 @@ class ComparisonSession:
                 f"Source '{source_name}' is not registered. "
                 f"Available: {sorted(self._sources)}"
             )
-        return _suggest_key_columns(
-            self._sources[source_name],
-            connection=self._connection,
+        return sorted(
+            _suggest_key_columns(
+                self._sources[source_name],
+                connection=self._connection,
+            ),
+            key=lambda s: s.distinct_count,
+            reverse=True,
         )
 
     def export_mismatches(self, output_path: str) -> None:

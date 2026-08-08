@@ -661,57 +661,69 @@ def dry_run(
             con.close()
 
 
-# Heuristic patterns that suggest a column is a measure, not a dimension.
-# Candidate key testing skips these -- measures are unlikely to be key columns.
-_MEASURE_HINTS = frozenset([
-    "revenue", "quantity", "amount", "qty", "count", "total",
-    "sales", "price", "cost", "invoice", "member", "value", "#",
+# DuckDB types that unambiguously indicate an aggregated numeric measure.
+# VARCHAR, INTEGER, DATE, TIMESTAMP etc. are excluded -- they commonly appear
+# as identifiers. Only float/decimal types are reliably measures.
+_MEASURE_TYPES = frozenset([
+    "FLOAT", "DOUBLE", "DECIMAL", "REAL", "HUGEINT",
 ])
 
 
-def _looks_like_measure(col: str) -> bool:
-    lower = col.lower()
-    return any(hint in lower for hint in _MEASURE_HINTS)
+def _looks_like_measure(dtype: str) -> bool:
+    upper = dtype.upper()
+    return any(t in upper for t in _MEASURE_TYPES)
+
+
+def _get_column_dtypes(
+    con: duckdb.DuckDBPyConnection,
+    alias: str,
+) -> dict[str, str]:
+    """Return {column_name: dtype} for an already-registered view."""
+    return {
+        row[0]: row[1]
+        for row in con.execute(f"DESCRIBE {_q(alias)}").fetchall()
+    }
 
 
 def suggest_key_columns(
     source: str,
     connection: duckdb.DuckDBPyConnection | None = None,
     max_combo_size: int = 6,
-) -> list[KeyColumnSuggestion]:
-    """Suggest which column(s) uniquely identify rows in a single source file.
+) -> "Generator[KeyColumnSuggestion, None, None]":
+    """Yield KeyColumnSuggestion results as each candidate combination is tested.
 
     Tests single columns first, then composites in increasing size. Stops
-    at the first size that produces at least one unique key -- no point
-    testing larger combos if a smaller one already works.
+    at the first size that produces at least one unique key.
 
-    Columns whose names suggest they are measures (revenue, quantity, etc.)
-    are excluded from candidate testing -- they are unlikely to be key
-    columns and including them would produce misleading suggestions.
+    Measure columns are identified by DuckDB dtype (FLOAT, DOUBLE, DECIMAL,
+    REAL) rather than by name -- type-based detection is more reliable since
+    column names vary widely across datasets.
 
-    Returns a list of KeyColumnSuggestion, sorted by distinct_count
-    descending (unique keys first). Non-unique candidates are included
-    so the caller can see how close each combination gets.
+    Yields results as they are computed so callers can print progressively.
+    The session API wraps this in a sorted list for convenience.
     """
     import duckdb as duckdb_module
     import itertools
+    from typing import Generator
 
     owns_connection = connection is None
     con = connection or duckdb_module.connect(database=":memory:")
     try:
         alias = "__suggest_key_source__"
-        all_columns = _register_source(con, alias, source)
+        _register_source(con, alias, source)
         total = _scalar_query(con, f"SELECT COUNT(*) FROM {_q(alias)}")
+        dtypes = _get_column_dtypes(con, alias)
 
-        dimensions = [c for c in all_columns if not _looks_like_measure(c)]
+        dimensions = [
+            col for col, dtype in dtypes.items()
+            if not _looks_like_measure(dtype)
+        ]
 
-        results: list[KeyColumnSuggestion] = []
         found_unique = False
 
         for size in range(1, min(max_combo_size + 1, len(dimensions) + 1)):
             if found_unique:
                 break
-            size_results: list[KeyColumnSuggestion] = []
             for combo in itertools.combinations(dimensions, size):
                 cols = list(combo)
                 col_sql = ", ".join(f"{_q(c)}" for c in cols)
@@ -722,15 +734,12 @@ def suggest_key_columns(
                 is_unique = distinct == total
                 if is_unique:
                     found_unique = True
-                size_results.append(KeyColumnSuggestion(
+                yield KeyColumnSuggestion(
                     columns=cols,
                     distinct_count=distinct,
                     total_count=total,
                     is_unique=is_unique,
-                ))
-            results.extend(size_results)
-
-        return sorted(results, key=lambda s: s.distinct_count, reverse=True)
+                )
     finally:
         if owns_connection:
             con.close()

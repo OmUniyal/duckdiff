@@ -21,9 +21,10 @@ from pathlib import Path
 
 import duckdb
 
+from duckdiff import __version__
 from duckdiff.config import ComparisonConfig, ToleranceRule
 from duckdiff.exceptions import DuckDiffError, SchemaMismatchError
-from duckdiff.results import ComparisonResult, DryRunResult, KeyColumnSuggestion
+from duckdiff.results import ComparisonResult, DryRunResult
 from duckdiff.session import ComparisonSession
 
 
@@ -125,6 +126,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="duckdiff",
         description="N-way, order-independent comparison of large record files.",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     compare_parser = subparsers.add_parser(
@@ -180,47 +186,6 @@ def _build_config(args: argparse.Namespace) -> ComparisonConfig:
         auto_intersect_columns=args.auto_intersect,
         enable_fuzzy_column_mapping=args.fuzzy_map,
     )
-
-
-def _format_key_suggestions(
-    suggestions: list[KeyColumnSuggestion],
-    source_name: str,
-) -> str:
-    lines = [f"Key column suggestions for '{source_name}':"]
-    if not suggestions:
-        lines.append("  No candidate keys found.")
-        return "\n".join(lines)
-
-    unique = [s for s in suggestions if s.is_unique]
-    non_unique = [s for s in suggestions if not s.is_unique]
-
-    if unique:
-        lines.append("")
-        lines.append("  Unique keys (safe to use with --key):")
-        for s in unique:
-            label = " + ".join(s.columns)
-            lines.append(f"    ✓  {label}")
-    else:
-        lines.append("")
-        lines.append("  No unique key found. Closest candidates:")
-
-    if non_unique:
-        lines.append("")
-        lines.append("  Non-unique candidates:")
-        for s in non_unique:
-            label = " + ".join(s.columns)
-            pct = s.distinct_count / s.total_count * 100
-            lines.append(
-                f"    -  {label:<40} "
-                f"{s.distinct_count:,} distinct / {s.total_count:,} rows ({pct:.1f}%)"
-            )
-
-    if unique:
-        lines.append("")
-        flags = " ".join(f'--key "{c}"' for c in unique[0].columns)
-        lines.append(f"  Suggested: duckdiff compare ... {flags}")
-
-    return "\n".join(lines)
 
 
 def _format_dry_run_result(result: DryRunResult) -> str:
@@ -353,18 +318,44 @@ def _run_keys(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
 ) -> int:
+    from duckdiff.comparator import suggest_key_columns as _suggest_key_columns_gen
+
     pair = args.source
     if "=" not in pair:
         parser.error(f"Source '{pair}' must be in name=path format.")
     name, path = pair.split("=", 1)
-    session = ComparisonSession()
-    session.add_source(name, path)
+
+    print(f"Key column suggestions for '{name}':")
+    print()
+
+    unique: list = []
+    non_unique: list = []
+
     try:
-        suggestions = session.suggest_key_columns(name)
+        for suggestion in _suggest_key_columns_gen(path):
+            label = " + ".join(suggestion.columns)
+            if suggestion.is_unique:
+                unique.append(suggestion)
+                print(f"  ✓  {label}  (unique)")
+            else:
+                non_unique.append(suggestion)
+                pct = suggestion.distinct_count / suggestion.total_count * 100
+                print(
+                    f"  -  {label:<40} "
+                    f"{suggestion.distinct_count:,} distinct / "
+                    f"{suggestion.total_count:,} rows ({pct:.1f}%)"
+                )
     except (DuckDiffError, ValueError, duckdb.Error) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    print(_format_key_suggestions(suggestions, name))
+
+    if unique:
+        print()
+        flags = " ".join(f'--key "{c}"' for c in unique[0].columns)
+        print(f"  Suggested: duckdiff compare ... {flags}")
+    elif not non_unique:
+        print("  No candidate keys found.")
+
     return 0
 
 
