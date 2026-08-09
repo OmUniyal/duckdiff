@@ -156,7 +156,12 @@ src/duckdiff/
 ## CLI usage
 
 `duckdiff` has three subcommands: `compare` (run a comparison), `keys`
-(discover key columns), and `ui` (launch the local web UI).
+(discover key columns), and `ui` (launch the local web UI). Use
+`duckdiff --version` to print the installed version.
+
+```bash
+duckdiff --version
+```
 
 ```bash
 duckdiff compare legacy=legacy.csv new=new.csv --key customer_id \
@@ -191,9 +196,10 @@ duckdiff keys a=data.csv
 
 Scans a single file and suggests which column(s) uniquely identify each
 row -- useful when you're not sure which `--key` to pass to `compare`.
-Measure-like columns (revenue, quantity, amount, etc.) are excluded
-automatically. Prints unique keys first, with suggested `--key` flags
-ready to copy into your `compare` command.
+Columns with numeric measure types (DOUBLE, FLOAT, DECIMAL) are excluded
+automatically -- integer and string columns are always tested as candidates.
+Prints unique keys first, with suggested `--key` flags ready to copy into
+your `compare` command.
 
 ## UI
 
