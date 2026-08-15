@@ -23,8 +23,9 @@ import duckdb
 
 from duckdiff import __version__
 from duckdiff.config import ComparisonConfig, ToleranceRule
-from duckdiff.exceptions import DuckDiffError, SchemaMismatchError
-from duckdiff.results import ComparisonResult, DryRunResult
+from duckdiff.exceptions import ConfigurationError, DuckDiffError, SchemaMismatchError
+from duckdiff.python_file_session import PythonFileSession
+from duckdiff.results import ComparisonResult, DryRunResult, PythonComparisonResult
 from duckdiff.session import ComparisonSession
 
 
@@ -121,6 +122,32 @@ def _add_compare_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_pyfile_subcommand(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """Register the `duckdiff pyfile` subcommand."""
+    pyfile_parser = subparsers.add_parser(
+        "pyfile",
+        help="Compare N Python source files via AST-based structural diff.",
+        description="N-way, order-independent structural comparison of Python files.",
+    )
+    pyfile_parser.add_argument(
+        "sources",
+        nargs="+",
+        help="Python files to compare, as name=path pairs (e.g. a=old.py b=new.py).",
+    )
+    pyfile_parser.add_argument(
+        "--show-unchanged",
+        action="store_true",
+        dest="show_unchanged",
+        help="Include unchanged definitions in the output (hidden by default).",
+    )
+    pyfile_parser.add_argument(
+        "--no-nested",
+        action="store_true",
+        dest="no_nested",
+        help="Suppress nested function rows from the output.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="duckdiff",
@@ -145,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Launch the local web UI (not yet implemented).",
         description="Launch duckdiff's local web UI in a browser.",
     )
+
+    _add_pyfile_subcommand(subparsers)
 
     keys_parser = subparsers.add_parser(
         "keys",
@@ -391,6 +420,161 @@ def _run_ui(
     return result.returncode
 
 
+def _format_pyfile_result(
+    result: PythonComparisonResult,
+    show_unchanged: bool = False,
+    no_nested: bool = False,
+) -> str:
+    NESTED_KINDS = {"nested_function"}
+    SEP = "─" * 40
+
+    if result.files_identical:
+        return "✓  All files are structurally identical."
+
+    if result.order_only:
+        lines = [
+            "⚠  Definition order differs — all definitions are semantically identical.",
+            "   Order changes can affect runtime behaviour in scripts with module-level",
+            "   execution or certain metaclass patterns.",
+            "",
+            "  Sources:",
+        ]
+        for label, path in result.sources.items():
+            lines.append(f"    {label} = {path}")
+        return "\n".join(lines)
+
+    # ── Header ────────────────────────────────────────────────────────
+    lines: list[str] = [
+        f"Python file comparison: {len(result.sources)} source(s)",
+        "",
+        "  Sources:",
+    ]
+    for label, path in result.sources.items():
+        lines.append(f"    {label} = {path}")
+
+    lines.append("")
+    summary_parts = []
+    if result.changed:
+        summary_parts.append(f"{result.changed} changed")
+    if result.missing:
+        summary_parts.append(f"{result.missing} missing")
+    if result.unchanged:
+        summary_parts.append(f"{result.unchanged} unchanged")
+    lines.append(f"  Summary: {', '.join(summary_parts)}")
+
+    # ── Filter helpers ─────────────────────────────────────────────────
+    def _should_show(d: object) -> bool:
+        from duckdiff.results import DefinitionDiff
+        assert isinstance(d, DefinitionDiff)
+        if no_nested and d.kind in NESTED_KINDS:
+            return False
+        return True
+
+    def _display_path(qpath: str) -> str:
+        return "[module level]" if qpath == "<module_statements>" else qpath
+
+    def _change_detail(d: object) -> str:
+        from duckdiff.results import DefinitionDiff
+        assert isinstance(d, DefinitionDiff)
+        if d.status != "changed":
+            return ""
+        if d.signature_changed and d.body_changed:
+            return "  signature + body changed"
+        if d.signature_changed:
+            return "  signature changed"
+        if d.body_changed:
+            return "  body changed"
+        return ""
+
+    def _indent(qpath: str) -> str:
+        """Indent nested definitions (those with a dot in qualified path)."""
+        depth = qpath.count(".")
+        return "    " * depth
+
+    # ── CHANGED block ──────────────────────────────────────────────────
+    changed_defs = [d for d in result.definitions if d.status == "changed" and _should_show(d)]
+    if changed_defs:
+        lines.append("")
+        lines.append(SEP)
+        lines.append("CHANGED")
+        lines.append(SEP)
+        for d in changed_defs:
+            indent = _indent(d.qualified_path)
+            detail = _change_detail(d)
+            lines.append(
+                f"  {indent}~ {_display_path(d.qualified_path):<45}"
+                f"[lines {d.lineno_start}-{d.lineno_end}]{detail}"
+            )
+
+    # ── MISSING block ──────────────────────────────────────────────────
+    missing_defs = [d for d in result.definitions if d.status == "missing" and _should_show(d)]
+    if missing_defs:
+        lines.append("")
+        lines.append(SEP)
+        lines.append("MISSING  (present in some sources only)")
+        lines.append(SEP)
+        for d in missing_defs:
+            indent = _indent(d.qualified_path)
+            lines.append(
+                f"  {indent}? {_display_path(d.qualified_path):<45}"
+                f"[lines {d.lineno_start}-{d.lineno_end}]"
+                f"  present in: {d.present_in}"
+            )
+
+    # ── UNCHANGED block ────────────────────────────────────────────────
+    unchanged_defs = [
+        d for d in result.definitions if d.status == "unchanged" and _should_show(d)
+    ]
+    lines.append("")
+    lines.append(SEP)
+    if show_unchanged and unchanged_defs:
+        lines.append("UNCHANGED")
+        lines.append(SEP)
+        for d in unchanged_defs:
+            indent = _indent(d.qualified_path)
+            lines.append(
+                f"  {indent}= {_display_path(d.qualified_path):<45}"
+                f"[lines {d.lineno_start}-{d.lineno_end}]"
+            )
+    else:
+        lines.append("UNCHANGED")
+        lines.append(SEP)
+        if unchanged_defs:
+            lines.append(
+                f"  {len(unchanged_defs)} definition(s) identical across all sources."
+                "  (--show-unchanged to display)"
+            )
+        else:
+            lines.append("  (none)")
+
+    return "\n".join(lines)
+
+
+def _run_pyfile(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> int:
+    session = PythonFileSession()
+    for pair in args.sources:
+        if "=" not in pair:
+            parser.error(f"Source '{pair}' must be in name=path format.")
+        name, path = pair.split("=", 1)
+        try:
+            session.add_source(name, path)
+        except (DuckDiffError, ConfigurationError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+
+    try:
+        result = session.compare()
+    except (DuckDiffError, ConfigurationError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+    print(_format_pyfile_result(result, args.show_unchanged, args.no_nested))
+    return 0 if (result.files_identical or result.order_only) else 1
+
+
 def main(
     argv: list[str] | None = None,
     input_func: Callable[[str], str] = input,
@@ -405,6 +589,8 @@ def main(
         return _run_ui(args, ui_runner)
     if args.command == "keys":
         return _run_keys(parser, args)
+    if args.command == "pyfile":
+        return _run_pyfile(parser, args)
 
     parser.error(f"unknown command '{args.command}'")  # unreachable: required=True guards this
     raise AssertionError("unreachable")  # appease mypy's return-type check
