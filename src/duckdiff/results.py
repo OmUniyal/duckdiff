@@ -87,3 +87,41 @@ class KeyColumnSuggestion:
     distinct_count: int
     total_count: int
     is_unique: bool
+
+# ---------------------------------------------------------------------------
+# Python file comparison results (v0.2.0)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DefinitionDiff:
+    """Diff result for a single named definition across N Python files."""
+
+    qualified_path: str    # e.g. "MyClass.my_method", "top_level_func"
+    parent_path: str       # "" for top-level, "MyClass" for methods
+    kind: str              # "function" | "async_function" | "class" | "nested_function" | "module_statements"
+    status: str            # "changed" | "unchanged" | "missing"
+    lineno_start: int      # from the file(s) where it exists
+    lineno_end: int
+    decorators: str        # JSON-serialised list of decorator name strings
+    # populated only when status == "changed":
+    signature_changed: bool = False
+    body_changed: bool = False
+    # populated only when status == "missing":
+    present_in: str = ""   # comma-separated labels where definition exists
+
+
+@dataclass
+class PythonComparisonResult:
+    """Top-level result returned by PythonFileSession.compare()."""
+
+    sources: dict[str, str]            # label → path
+    files_identical: bool              # True = all file_hashes match, no drill-down needed
+    file_hashes: dict[str, str]        # label → sha256 hash
+    definitions: list[DefinitionDiff]  # empty when files_identical=True
+    added: int = 0        # kept for potential future use (currently always 0 — see "missing")
+    removed: int = 0      # kept for potential future use (currently always 0 — see "missing")
+    changed: int = 0
+    unchanged: int = 0
+    missing: int = 0      # definitions present in some sources but not all
+    order_only: bool = False  # True when files differ in order only — all definitions unchanged
