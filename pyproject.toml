@@ -4,17 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "duckdiff"
-version = "0.1.0"
-description = "N-way, order-independent comparison of large record files, powered by DuckDB."
+version = "0.2.0"
+description = "N-way, order-independent comparison of large record files and Python source files, powered by DuckDB."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
     { name = "Om Uniyal" }
 ]
-keywords = ["duckdb", "diff", "comparison", "data-quality", "csv", "parquet", "reconciliation"]
+keywords = ["duckdb", "diff", "comparison", "data-quality", "csv", "parquet", "reconciliation", "ast", "python", "code-diff"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",

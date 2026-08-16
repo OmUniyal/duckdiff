@@ -308,7 +308,7 @@ for d in result.definitions:
 - [x] Key column discovery (`duckdiff keys` suggests unique key columns for a source file)
 - [x] Auto-intersect differing schemas (`auto_intersect_columns=True` compares only shared columns, warns about dropped ones)
 - [x] Python file diffing via AST (`duckdiff pyfile` — structural comparison of `.py` files, N-way, order-independent)
-- [ ] Fuzzy path matching for Python file diffing (renamed function/class detection)
+- [x] Fuzzy path matching for Python file diffing (renamed function/class detection)
 - [ ] YAML/TOML config diffing (v0.3.0)
 - [ ] Live database connection diffing (v0.4.0)
 
