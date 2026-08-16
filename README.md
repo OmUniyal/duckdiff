@@ -1,6 +1,6 @@
 # duckdiff
 
-N-way, order-independent comparison of large record files, powered by [DuckDB](https://duckdb.org/).
+N-way, order-independent comparison of large record files and Python source files, powered by [DuckDB](https://duckdb.org/).
 
 ## Why
 
@@ -14,6 +14,10 @@ Most diff tools compare exactly two files and assume they fit in memory.
 - **Interactive fuzzy column mapping.** When schemas don't line up exactly
   (renamed columns, casing differences), `duckdiff` suggests a mapping —
   it never guesses and applies one silently.
+- **Python file diffing via AST.** Compare `.py` files structurally —
+  not line by line. Detects added, removed, changed, and reordered
+  definitions (functions, classes, methods, nested functions) independent
+  of comments, whitespace, and formatting noise.
 
 ## Two comparison modes
 
@@ -142,20 +146,24 @@ record_id, column,  legacy_value, new_value
 
 ```
 src/duckdiff/
-├── session.py      # ComparisonSession — the real engine, everything else wraps this
-├── config.py       # ComparisonConfig — minimal-by-default options
-├── comparator.py   # N-way DuckDB comparison logic (both modes, mismatch detail, export)
-├── schema.py       # Fuzzy column-mapping suggestions
-├── results.py      # ComparisonResult / SourceSummary / MismatchSample / KeyColumnSuggestion
-├── exceptions.py   # DuckDiffError hierarchy
-├── cli.py          # Thin CLI wrapper (compare/ui subcommands)
+├── session.py             # ComparisonSession — structured data comparison engine
+├── python_file_session.py # PythonFileSession — Python file comparison via AST
+├── config.py              # ComparisonConfig — minimal-by-default options
+├── comparator.py          # N-way DuckDB comparison logic (both modes, mismatch detail, export)
+├── schema.py              # Fuzzy column-mapping suggestions
+├── results.py             # Result dataclasses (ComparisonResult, PythonComparisonResult, …)
+├── exceptions.py          # DuckDiffError hierarchy
+├── cli.py                 # Thin CLI wrapper (compare/pyfile/keys/ui subcommands)
+├── extractors/
+│   └── python_ast.py      # AST extractor — parses .py files into tabular definition rows
 └── ui/
-└── app.py      # Streamlit web UI
+    └── app.py             # Streamlit web UI
 ```
 
 ## CLI usage
 
-`duckdiff` has three subcommands: `compare` (run a comparison), `keys`
+`duckdiff` has four subcommands: `compare` (run a structured data
+comparison), `pyfile` (compare Python source files via AST), `keys`
 (discover key columns), and `ui` (launch the local web UI). Use
 `duckdiff --version` to print the installed version.
 
@@ -217,6 +225,59 @@ interactive fuzzy-mapping retry flow on schema mismatches, a 3-row mismatch
 preview after each comparison, and an export-to-files button with a
 pre-filled output path derived from the first source's location.
 
+## Python file diffing
+
+Compare `.py` files structurally via AST — not line by line. Whitespace,
+comments, and formatting changes are ignored. Only structural changes
+(function bodies, signatures, docstrings, class attributes) are flagged.
+
+```bash
+duckdiff pyfile a=old.py b=new.py
+duckdiff pyfile a=v1.py b=v2.py c=v3.py   # N-way
+duckdiff pyfile a=old.py b=new.py --show-unchanged
+duckdiff pyfile a=old.py b=new.py --no-nested
+```
+
+- **Two-phase comparison.** A fast file-level hash check runs first — if
+  all files are structurally identical, the comparison exits immediately.
+  Definition-level drill-down only runs when files differ.
+- **Granular output.** One row per named definition: top-level functions,
+  classes, methods, and nested functions. Class-level attributes and method
+  bodies are compared independently — a method change does not mark the
+  whole class as changed.
+- **Order detection.** If files differ only in definition order (same
+  bodies, same signatures, different sequence), `duckdiff pyfile` flags it
+  as an order-only difference and exits 0 — with a warning that order
+  changes can affect runtime behaviour in scripts with module-level
+  execution.
+- **Change detail.** For changed definitions, the output distinguishes
+  between signature changes (argument names, defaults, return annotation),
+  body changes (logic, docstring), or both.
+- **`--show-unchanged`** — include identical definitions in the output
+  (hidden by default to reduce noise).
+- **`--no-nested`** — suppress nested function rows, useful when you only
+  care about the top-level API surface.
+
+Exits 0 when files are identical or differ in order only. Exits 1 when
+real differences (changed or missing definitions) are found. Exits 2 on
+config or file errors.
+
+### Python file diffing via the API
+
+```python
+from duckdiff import PythonFileSession
+
+session = PythonFileSession()
+session.add_source("old", "old_pipeline.py")
+session.add_source("new", "new_pipeline.py")
+result = session.compare()
+
+print(result.files_identical)   # True / False
+print(result.order_only)        # True if order-only difference
+for d in result.definitions:
+    print(d.qualified_path, d.status, d.lineno_start, d.lineno_end)
+```
+
 ## Known limitations
 
 - **CLI errors from DuckDB are passed through verbatim.** `duckdiff`'s own
@@ -246,6 +307,10 @@ pre-filled output path derived from the first source's location.
 - [x] `--dry-run` cost preview for large comparisons
 - [x] Key column discovery (`duckdiff keys` suggests unique key columns for a source file)
 - [x] Auto-intersect differing schemas (`auto_intersect_columns=True` compares only shared columns, warns about dropped ones)
+- [x] Python file diffing via AST (`duckdiff pyfile` — structural comparison of `.py` files, N-way, order-independent)
+- [ ] Fuzzy path matching for Python file diffing (renamed function/class detection)
+- [ ] YAML/TOML config diffing (v0.3.0)
+- [ ] Live database connection diffing (v0.4.0)
 
 ## License
 
