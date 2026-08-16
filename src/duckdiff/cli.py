@@ -146,6 +146,20 @@ def _add_pyfile_subcommand(subparsers: argparse._SubParsersAction) -> None:  # t
         dest="no_nested",
         help="Suppress nested function rows from the output.",
     )
+    pyfile_parser.add_argument(
+        "--fuzzy-match",
+        action="store_true",
+        dest="fuzzy_match",
+        help="On missing definitions, suggest likely renames and offer to "
+        "apply them (with confirmation). Only supported for 2-way comparisons.",
+    )
+    pyfile_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt and auto-accept suggested renames. "
+        "Only relevant with --fuzzy-match.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -456,6 +470,8 @@ def _format_pyfile_result(
     summary_parts = []
     if result.changed:
         summary_parts.append(f"{result.changed} changed")
+    if result.renamed:
+        summary_parts.append(f"{result.renamed} renamed")
     if result.missing:
         summary_parts.append(f"{result.missing} missing")
     if result.unchanged:
@@ -476,7 +492,7 @@ def _format_pyfile_result(
     def _change_detail(d: object) -> str:
         from duckdiff.results import DefinitionDiff
         assert isinstance(d, DefinitionDiff)
-        if d.status != "changed":
+        if d.status not in ("changed", "renamed"):
             return ""
         if d.signature_changed and d.body_changed:
             return "  signature + body changed"
@@ -504,6 +520,21 @@ def _format_pyfile_result(
             lines.append(
                 f"  {indent}~ {_display_path(d.qualified_path):<45}"
                 f"[lines {d.lineno_start}-{d.lineno_end}]{detail}"
+            )
+
+    # ── RENAMED block ──────────────────────────────────────────────────
+    renamed_defs = [d for d in result.definitions if d.status == "renamed" and _should_show(d)]
+    if renamed_defs:
+        lines.append("")
+        lines.append(SEP)
+        lines.append("RENAMED")
+        lines.append(SEP)
+        for d in renamed_defs:
+            indent = _indent(d.qualified_path)
+            detail = _change_detail(d)
+            lines.append(
+                f"  {indent}↪ {d.renamed_from} → {_display_path(d.qualified_path):<35}"
+                f"[lines {d.lineno_start}-{d.lineno_end}]{detail or '  body unchanged'}"
             )
 
     # ── MISSING block ──────────────────────────────────────────────────
@@ -553,6 +584,7 @@ def _format_pyfile_result(
 def _run_pyfile(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
+    input_func: Callable[[str], str] = input,
 ) -> int:
     session = PythonFileSession()
     for pair in args.sources:
@@ -570,6 +602,31 @@ def _run_pyfile(
     except (DuckDiffError, ConfigurationError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
+
+    # ── Fuzzy path matching (opt-in, 2-way only) ──────────────────────
+    if getattr(args, "fuzzy_match", False) and result.missing > 0:
+        try:
+            suggestions = session.suggest_path_mapping()
+        except ConfigurationError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+
+        if suggestions:
+            print("Suggested rename mapping:")
+            for old, new in suggestions.items():
+                print(f"  {old} → {new}")
+            confirmed = (
+                getattr(args, "yes", False)
+                or _prompt_yes_no("Apply rename mapping? [y/N] ", input_func)
+            )
+            if confirmed:
+                try:
+                    result = session.apply_path_mapping(suggestions)
+                except (DuckDiffError, ConfigurationError) as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    return 2
+            else:
+                print("Rename mapping not applied.", file=sys.stderr)
 
     print(_format_pyfile_result(result, args.show_unchanged, args.no_nested))
     return 0 if (result.files_identical or result.order_only) else 1
@@ -590,7 +647,7 @@ def main(
     if args.command == "keys":
         return _run_keys(parser, args)
     if args.command == "pyfile":
-        return _run_pyfile(parser, args)
+        return _run_pyfile(parser, args, input_func)
 
     parser.error(f"unknown command '{args.command}'")  # unreachable: required=True guards this
     raise AssertionError("unreachable")  # appease mypy's return-type check

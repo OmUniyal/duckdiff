@@ -11,11 +11,14 @@ comparator.py — the AST extractor feeds this session directly.
 
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from duckdiff.exceptions import ConfigurationError, DuckDiffError
 from duckdiff.extractors.python_ast import DefinitionRow, extract_definitions, file_hash
 from duckdiff.results import DefinitionDiff, PythonComparisonResult
+
+_FUZZY_THRESHOLD = 0.6
 
 
 class PythonFileSession:
@@ -45,6 +48,161 @@ class PythonFileSession:
             raise DuckDiffError(f"Expected a .py file, got: {resolved.name}")
 
         self._sources[label] = resolved
+
+    def suggest_path_mapping(self) -> dict[str, str]:
+        """Suggest likely renames across exactly 2 registered sources.
+
+        Compares qualified_paths that are 'missing' in each source and
+        returns a mapping of old_path → new_path for pairs that score
+        above the similarity threshold. Only paths of the same kind are
+        matched. Never auto-applied — always explicit human opt-in.
+
+        Raises:
+            ConfigurationError: if not exactly 2 sources are registered.
+        """
+        if len(self._sources) != 2:
+            raise ConfigurationError(
+                "suggest_path_mapping() requires exactly 2 sources, "
+                f"got {len(self._sources)}. Fuzzy path matching is not "
+                "supported for N-way (3+) comparisons."
+            )
+
+        result = self.compare()
+        if result.files_identical:
+            return {}
+
+        missing_defs = [d for d in result.definitions if d.status == "missing"]
+        if not missing_defs:
+            return {}
+
+        labels = list(self._sources.keys())
+        label_a, label_b = labels[0], labels[1]
+
+        # Split missing defs by which source they're present in
+        only_in_a = [d for d in missing_defs if label_a in d.present_in.split(", ")]
+        only_in_b = [d for d in missing_defs if label_b in d.present_in.split(", ")]
+
+        suggestions: dict[str, str] = {}
+        used_targets: set[str] = set()
+
+        for candidate in only_in_a:
+            best_score = 0.0
+            best_match: DefinitionDiff | None = None
+
+            for target in only_in_b:
+                # Only match same kind
+                if target.kind != candidate.kind:
+                    continue
+                if target.qualified_path in used_targets:
+                    continue
+                score = SequenceMatcher(
+                    None,
+                    candidate.qualified_path,
+                    target.qualified_path,
+                ).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_match = target
+
+            if best_match is not None and best_score >= _FUZZY_THRESHOLD:
+                suggestions[candidate.qualified_path] = best_match.qualified_path
+                used_targets.add(best_match.qualified_path)
+
+        return suggestions
+
+    def apply_path_mapping(self, mapping: dict[str, str]) -> PythonComparisonResult:
+        """Rerun the comparison treating old_path → new_path as renames.
+
+        Definitions matched by the mapping get status='renamed' instead
+        of appearing as two separate 'missing' entries. Body and signature
+        change flags are still populated for renamed definitions.
+
+        Args:
+            mapping: dict of old_qualified_path → new_qualified_path,
+                     as returned by suggest_path_mapping().
+
+        Raises:
+            ConfigurationError: if not exactly 2 sources are registered.
+        """
+        if len(self._sources) != 2:
+            raise ConfigurationError(
+                "apply_path_mapping() requires exactly 2 sources."
+            )
+
+        result = self.compare()
+        if result.files_identical:
+            return result
+
+        labels = list(self._sources.keys())
+        extracted: dict[str, dict[str, DefinitionRow]] = {
+            label: {
+                row.qualified_path: row
+                for row in extract_definitions(self._sources[label])
+            }
+            for label in labels
+        }
+
+        # Paths that are consumed by the mapping (excluded from missing)
+        mapped_old = set(mapping.keys())
+        mapped_new = set(mapping.values())
+
+        new_defs: list[DefinitionDiff] = []
+
+        for d in result.definitions:
+            if d.status != "missing":
+                new_defs.append(d)
+                continue
+            if d.qualified_path in mapped_old or d.qualified_path in mapped_new:
+                continue  # will be replaced by a renamed entry below
+            new_defs.append(d)
+
+        # Build renamed entries
+        label_a, label_b = labels[0], labels[1]
+        for old_path, new_path in mapping.items():
+            row_a = extracted[label_a].get(old_path)
+            row_b = extracted[label_b].get(new_path)
+            if row_a is None or row_b is None:
+                continue  # mapping references unknown path — skip silently
+
+            sig_changed = row_a.signature_hash != row_b.signature_hash
+            body_changed = row_a.body_hash != row_b.body_hash
+
+            new_defs.append(
+                DefinitionDiff(
+                    qualified_path=new_path,
+                    parent_path=row_b.parent_path,
+                    kind=row_b.kind,
+                    status="renamed",
+                    lineno_start=row_b.lineno_start,
+                    lineno_end=row_b.lineno_end,
+                    decorators=row_b.decorators,
+                    signature_changed=sig_changed,
+                    body_changed=body_changed,
+                    renamed_from=old_path,
+                )
+            )
+
+        # Sort: changed, renamed, missing, unchanged
+        _order = {"changed": 0, "renamed": 1, "missing": 2, "unchanged": 3}
+        new_defs.sort(key=lambda d: (_order.get(d.status, 9), d.qualified_path))
+
+        changed = sum(1 for d in new_defs if d.status == "changed")
+        unchanged = sum(1 for d in new_defs if d.status == "unchanged")
+        missing = sum(1 for d in new_defs if d.status == "missing")
+        renamed = sum(1 for d in new_defs if d.status == "renamed")
+        order_only = changed == 0 and missing == 0 and renamed == 0 and unchanged > 0
+
+        return PythonComparisonResult(
+            sources=result.sources,
+            files_identical=False,
+            file_hashes=result.file_hashes,
+            definitions=new_defs,
+            changed=changed,
+            unchanged=unchanged,
+            missing=missing,
+            renamed=renamed,
+            order_only=order_only,
+        )
 
     def compare(self) -> PythonComparisonResult:
         """Run the two-phase comparison across all registered sources.

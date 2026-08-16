@@ -109,6 +109,8 @@ class DefinitionDiff:
     body_changed: bool = False
     # populated only when status == "missing":
     present_in: str = ""   # comma-separated labels where definition exists
+    # populated only when status == "renamed":
+    renamed_from: str = ""  # original qualified_path before rename
 
 
 @dataclass
@@ -124,4 +126,5 @@ class PythonComparisonResult:
     changed: int = 0
     unchanged: int = 0
     missing: int = 0      # definitions present in some sources but not all
+    renamed: int = 0      # definitions detected as renames via fuzzy path matching
     order_only: bool = False  # True when files differ in order only — all definitions unchanged
